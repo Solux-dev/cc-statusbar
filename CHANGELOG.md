@@ -3,6 +3,15 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-05-30
+
+### Added
+
+- **Persistent usage panel.** A “⤢ Open panel” link in the tooltip (and a
+  *“Open usage panel”* command) opens a dockable, **live-updating** panel with
+  the full breakdown — so you can keep it open and study it, instead of relying
+  on the auto-hiding hover tooltip. Clicking the status-bar item still refreshes.
+
 ## [0.2.2] — 2026-05-30
 
 ### Added

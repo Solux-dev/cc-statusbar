@@ -9,7 +9,7 @@ import {
   parseRateLimitHeaders,
   WINDOW_5H_SECONDS,
 } from "../metrics";
-import { buildView } from "../render";
+import { buildView, buildPanelHtml } from "../render";
 import { resolveLang, messages } from "../i18n";
 
 const W = { cacheRead: 0.1, cacheWrite: 1.25 };
@@ -173,6 +173,27 @@ test("buildView: pace verdicts use the agreed wording", () => {
   const tightQ = { state: "ok" as const, fiveH: { pct: 50, resetAt: now + WINDOW_5H_SECONDS * (1 - 0.52) }, sevenD: null };
   assert.match(buildView({ input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 }, W, tightQ, now, "en").tooltip, /running tight/);
   assert.match(buildView({ input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 }, W, tightQ, now, "ru").tooltip, /близко к лимиту/);
+});
+
+test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)", () => {
+  const now = 1000;
+  const totals = { input: 50000, output: 150000, work: 200000, cacheRead: 10_000_000, cacheWrite: 1_000_000 };
+  const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 }, sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 } };
+  const en = buildPanelHtml(totals, W, q, now, "en");
+  assert.match(en, /^<!DOCTYPE html>/);
+  assert.match(en, /= Effective/);
+  assert.match(en, /2\.5M/);
+  assert.match(en, /Subscription quota/);
+  const ru = buildPanelHtml(totals, W, q, now, "ru");
+  assert.match(ru, /Эффективно/);
+  assert.match(ru, /Тариф/);
+});
+
+test("buildPanelHtml: escapes nothing dangerous + handles disabled quota", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const html = buildPanelHtml(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
+  assert.ok(!/<script/i.test(html), "no script tags");
+  assert.match(html, /polling is off/);
 });
 
 test("buildView: over pace yields over level (item color)", () => {

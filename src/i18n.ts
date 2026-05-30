@@ -52,6 +52,19 @@ export interface Messages {
   localAlwaysAccurate: string;
   legend: string;
   switchLang: string; // tooltip link label → ccStatusbar.switchLanguage
+  openPanel: string; // tooltip link label → ccStatusbar.openPanel
+  panelTitle: string; // webview panel tab title
+  // webview panel (plain text — HTML provides the styling)
+  tok: string;
+  panelWork: string;
+  panelInOut: (input: string, output: string) => string;
+  panelCache: string;
+  panelEffective: string;
+  panelCacheDetail: (read: string, write: string, saved: string) => string;
+  panelPace: (perHour: string) => string;
+  panelQuotaHeader: string;
+  panelLocalAccurate: string;
+  panelLegend: string;
 }
 
 const EN: Messages = {
@@ -86,6 +99,19 @@ const EN: Messages = {
   localAlwaysAccurate: "_The numbers above come from the local transcript — always accurate._",
   legend: "_Dot color: 🟢 on track · 🟡 running tight · 🔴 over pace. Click the item to refresh._",
   switchLang: "🌐 Change language",
+  openPanel: "⤢ Open panel",
+  panelTitle: "Claude Code — Session Usage",
+  tok: "tok",
+  panelWork: "Work (input + output)",
+  panelInOut: (input, output) => `input ${input} / output ${output}`,
+  panelCache: "+ cache (counted in effective)",
+  panelEffective: "= Effective",
+  panelCacheDetail: (read, write, saved) =>
+    `cache: read ${read} / write ${write} · saved vs no-cache ≈${saved}`,
+  panelPace: (perHour) => `pace: ~${perHour} eff·tok/h (by active time)`,
+  panelQuotaHeader: "Subscription quota (real, from server)",
+  panelLocalAccurate: "The numbers above come from the local transcript — always accurate.",
+  panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
 };
 
 const RU: Messages = {
@@ -120,6 +146,19 @@ const RU: Messages = {
   localAlwaysAccurate: "_Числа выше — из локального транскрипта, всегда точны._",
   legend: "_Цвет точки: 🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы. Клик по строке — обновить._",
   switchLang: "🌐 Сменить язык",
+  openPanel: "⤢ Открыть панель",
+  panelTitle: "Claude Code — расход сессии",
+  tok: "ток",
+  panelWork: "Работа (вход + выход)",
+  panelInOut: (input, output) => `вход ${input} / выход ${output}`,
+  panelCache: "+ на кэш (учтено в эффективном)",
+  panelEffective: "= Эффективно",
+  panelCacheDetail: (read, write, saved) =>
+    `кэш: чтение ${read} / запись ${write} · сэкономлено vs без кэша ≈${saved}`,
+  panelPace: (perHour) => `темп: ~${perHour} эфф·ток/ч (по активному времени)`,
+  panelQuotaHeader: "Тариф (реальный, с сервера)",
+  panelLocalAccurate: "Числа выше — из локального транскрипта, всегда точны.",
+  panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",
 };
 
 const TABLE: Record<Lang, Messages> = { en: EN, ru: RU };

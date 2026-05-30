@@ -107,7 +107,105 @@ export function buildView(
   t.push("");
   t.push(m.legend);
   t.push("");
-  t.push(`[${m.switchLang}](command:ccStatusbar.switchLanguage)`);
+  t.push(`[${m.openPanel}](command:ccStatusbar.openPanel) · [${m.switchLang}](command:ccStatusbar.switchLanguage)`);
 
   return { text, tooltip: t.join("\n"), level };
+}
+
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Full HTML document for the persistent webview panel — same numbers as the
+ *  tooltip, themed with VS Code variables. Pure: no VS Code imports, no scripts
+ *  (the extension re-renders this string on each tick). */
+export function buildPanelHtml(
+  totals: Totals,
+  weights: Weights,
+  quota: QuotaView,
+  nowSec: number,
+  lang: Lang = "en",
+  apiActiveMs = 0
+): string {
+  const m = messages(lang);
+  const eff = effectiveTokens(totals, weights);
+  const cacheCost = Math.max(0, eff - totals.work);
+  const saved = Math.max(0, 0.9 * totals.cacheRead - 0.25 * totals.cacheWrite);
+
+  const rows: string[] = [];
+  rows.push(`<div class="row"><span>${esc(m.panelWork)}</span><b>${fmtTokens(totals.work)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="sub">${esc(m.panelInOut(fmtTokens(totals.input), fmtTokens(totals.output)))}</div>`);
+  rows.push(`<div class="row"><span>${esc(m.panelCache)}</span><b>~${fmtTokens(cacheCost)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="row big"><span>${esc(m.panelEffective)}</span><b>${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="sub">${esc(m.panelCacheDetail(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite), fmtTokens(saved)))}</div>`);
+  if (apiActiveMs >= 1000) {
+    const perHr = eff / (apiActiveMs / 3_600_000);
+    rows.push(`<div class="sub">${esc(m.panelPace(fmtTokens(perHr)))}</div>`);
+  }
+
+  const quotaBlock: string[] = [];
+  const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
+    if (!w) {
+      quotaBlock.push(`<div class="qrow"><span class="qlabel">${esc(label)}</span><span>—</span></div>`);
+      return;
+    }
+    const lvl = paceLevel(w.pct, w.resetAt, nowSec, windowSec);
+    const color = lvl === "over" ? "var(--cc-red)" : lvl === "tight" ? "var(--cc-yellow)" : "var(--cc-green)";
+    const pct = Math.max(0, Math.min(100, w.pct));
+    const reset = w.resetAt ? esc(m.quotaReset(fmtRemaining(w.resetAt - nowSec, m.units))) : "";
+    quotaBlock.push(
+      `<div class="qrow">` +
+        `<span class="dot" style="background:${color}"></span>` +
+        `<span class="qlabel">${esc(label)}</span>` +
+        `<span class="bar"><i style="width:${pct.toFixed(0)}%;background:${color}"></i></span>` +
+        `<b>${w.pct.toFixed(0)}%</b>` +
+        `<span class="verdict">${esc(m.verdict[lvl])}${reset}</span>` +
+        `</div>`
+    );
+  };
+
+  let quotaSection: string;
+  if (quota.state === "ok") {
+    windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
+    windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
+    quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}`;
+  } else {
+    quotaSection =
+      `<p class="muted">${esc(m.quotaStateMsg[quota.state])}</p>` +
+      `<p class="muted">${esc(m.panelLocalAccurate)}</p>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="${lang}">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<style>
+  :root { --cc-green:#3fb950; --cc-yellow:#d6a31a; --cc-red:#e5534b; }
+  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground);
+         padding: 14px 18px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  h3 { font-size: 13px; margin: 18px 0 8px; opacity: .85; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; }
+  .row.big b { font-size: 15px; }
+  .row span { opacity:.9; } .row b { font-variant-numeric: tabular-nums; }
+  .sub { opacity:.6; font-size:12px; padding:1px 0 6px; }
+  .qrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  .dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+  .qlabel { width:28px; opacity:.85; }
+  .bar { flex:1; height:8px; border-radius:4px; background:var(--vscode-input-background,rgba(255,255,255,.08)); overflow:hidden; }
+  .bar i { display:block; height:100%; }
+  .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
+  .verdict { opacity:.7; font-size:12px; }
+  .muted { opacity:.65; font-size:12px; }
+  .legend { margin-top:18px; opacity:.6; font-size:12px; }
+</style>
+</head>
+<body>
+  <h2>${esc(m.panelTitle)}</h2>
+  ${rows.join("\n  ")}
+  ${quotaSection}
+  <div class="legend">${esc(m.panelLegend)}</div>
+</body>
+</html>`;
 }

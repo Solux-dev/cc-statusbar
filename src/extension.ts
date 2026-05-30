@@ -4,12 +4,13 @@
 import * as vscode from "vscode";
 import { readSessionTotals } from "./transcript";
 import { fetchQuota, shouldPoll, QuotaResult } from "./quota";
-import { buildView, QuotaView } from "./render";
+import { buildView, buildPanelHtml, QuotaView } from "./render";
 import { Weights } from "./metrics";
 import { resolveLang, messages, LangSetting } from "./i18n";
 
 let item: vscode.StatusBarItem;
 let timer: NodeJS.Timeout | undefined;
+let panel: vscode.WebviewPanel | undefined;
 
 // quota state across ticks
 let lastQuota: QuotaResult | null = null;
@@ -90,9 +91,9 @@ async function tick() {
   const view = buildView(totals, conf.weights, quotaView, nowSec, lang);
   item.text = view.text;
   const md = new vscode.MarkdownString(view.tooltip);
-  // trusted so the "change language" command link in the tooltip is clickable;
-  // only our own ccStatusbar.* command is referenced.
-  md.isTrusted = { enabledCommands: ["ccStatusbar.switchLanguage"] };
+  // trusted so the tooltip's command links are clickable; only our own
+  // ccStatusbar.* commands are referenced.
+  md.isTrusted = { enabledCommands: ["ccStatusbar.switchLanguage", "ccStatusbar.openPanel"] };
   item.tooltip = md;
   item.backgroundColor =
     view.level === "over"
@@ -101,6 +102,11 @@ async function tick() {
       ? new vscode.ThemeColor("statusBarItem.warningBackground")
       : undefined;
   item.show();
+
+  // keep the (optional) persistent panel live
+  if (panel) {
+    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang);
+  }
 }
 
 function rebuildItem() {
@@ -144,6 +150,23 @@ export function activate(context: vscode.ExtensionContext) {
         void tick();
       }
     }),
+    vscode.commands.registerCommand("ccStatusbar.openPanel", () => {
+      const lang = resolveLang(cfg().language, vscode.env.language);
+      if (panel) {
+        panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Beside);
+      } else {
+        panel = vscode.window.createWebviewPanel(
+          "ccStatusbarUsage",
+          messages(lang).panelTitle,
+          { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+          { enableScripts: false, retainContextWhenHidden: true }
+        );
+        panel.onDidDispose(() => {
+          panel = undefined;
+        });
+      }
+      void tick(); // fill/refresh immediately
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("ccStatusbar")) {
         rebuildItem();
@@ -167,4 +190,5 @@ function startTimer() {
 export function deactivate() {
   if (timer) clearInterval(timer);
   item?.dispose();
+  panel?.dispose();
 }
