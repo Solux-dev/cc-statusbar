@@ -158,6 +158,23 @@ test("buildView (ru): disabled state falls back to эфф in bar", () => {
   assert.match(v.tooltip, /опрос выключен/);
 });
 
+test("buildView: tooltip carries the switch-language command link (both langs)", () => {
+  const totals = { input: 100, output: 100, work: 200, cacheRead: 0, cacheWrite: 0 };
+  const en = buildView(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
+  const ru = buildView(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "ru");
+  assert.match(en.tooltip, /\(command:ccStatusbar\.switchLanguage\)/);
+  assert.match(ru.tooltip, /\(command:ccStatusbar\.switchLanguage\)/);
+  assert.match(en.tooltip, /Change language/);
+  assert.match(ru.tooltip, /Сменить язык/);
+});
+
+test("buildView: pace verdicts use the agreed wording", () => {
+  const now = 1000;
+  const tightQ = { state: "ok" as const, fiveH: { pct: 50, resetAt: now + WINDOW_5H_SECONDS * (1 - 0.52) }, sevenD: null };
+  assert.match(buildView({ input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 }, W, tightQ, now, "en").tooltip, /running tight/);
+  assert.match(buildView({ input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 }, W, tightQ, now, "ru").tooltip, /близко к лимиту/);
+});
+
 test("buildView: over pace yields over level (item color)", () => {
   const now = 1000;
   const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };

@@ -3,6 +3,20 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2] — 2026-05-30
+
+### Added
+
+- **Easy language switching:** a “🌐 Change language / Сменить язык” link at the
+  bottom of the hover tooltip, and a **“Claude Code Statusbar: Switch language”**
+  command — so the language is discoverable without digging into Settings.
+
+### Changed
+
+- Reworded the pace verdicts for clarity and made the per-window verdict match
+  the legend. EN: `on track` / `running tight` / `over pace`. RU: `в норме` /
+  `близко к лимиту` / `выше нормы`.
+
 ## [0.2.1] — 2026-05-30
 
 ### Added

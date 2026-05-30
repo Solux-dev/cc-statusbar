@@ -37,9 +37,9 @@ Hover for the full breakdown (tooltip):
 - **cache** read / write + estimated **savings**
 - **pace** — effective tokens per hour of active work
 - **5h / 7d** real subscription quota: % used, colored bar, reset countdown,
-  and a plain-language verdict (`on track` / `cutting it close` /
-  `spending faster than the limit`) — the **whole item turns yellow/red** when
-  the current burn pace risks exceeding a window.
+  and a plain-language verdict (`on track` / `running tight` / `over pace`) —
+  the **whole item turns yellow/red** when the current burn pace risks
+  exceeding a window.
 
 The `effective` formula matches the project's `tools/session-cost.py` /
 `docs/cost-metrics.md`, so the bar agrees with the end-of-session reports.
@@ -49,8 +49,8 @@ The `effective` formula matches the project's `tools/session-cost.py` /
 | In the bar/tooltip | English | По-русски |
 |--------------------|---------|-----------|
 | 🟢 | on track — at this pace you'll comfortably fit the window | в норме — при таком темпе уложитесь в окно |
-| 🟡 | cutting it close — near the limit before reset | впритык — близко к лимиту до сброса |
-| 🔴 | spending faster than the limit — may run out before reset | опережение — тратите быстрее лимита, можете упереться до сброса |
+| 🟡 | running tight — getting close to the limit before reset | близко к лимиту — мало запаса до сброса |
+| 🔴 | over pace — burning faster than the window allows; may run out before reset | выше нормы — тратите быстрее лимита, можете упереться до сброса |
 | `5h` / `7d` | your two rolling subscription windows (5-hour and 7-day) | два окна подписки (за 5 часов и за 7 дней) |
 | `work` / работа | tokens actually sent + received this session | реально отправленные + полученные токены за сессию |
 | `effective` / эффективно | one comparable number that fairly counts cache (cheap to read, costly to write) | единое сравнимое число, честно учитывающее кэш |
@@ -58,8 +58,20 @@ The `effective` formula matches the project's `tools/session-cost.py` /
 | `pace` / темп | effective tokens per hour of active work | эффективных токенов в час активной работы |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
 
-The plugin's language follows the editor automatically; set
-`ccStatusbar.language` to `en` or `ru` to force one.
+### Language / Язык
+
+By default the plugin **follows the editor's display language** (English for an
+English editor, Russian for a Russian one). To force a language, any of:
+
+- **Hover the status-bar item → click “🌐 Change language / Сменить язык”** at
+  the bottom of the tooltip;
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **“Claude Code Statusbar: Switch
+  language”**;
+- Settings → search `ccStatusbar.language` → `auto` / `en` / `ru`.
+
+_По умолчанию язык берётся из языка редактора. Сменить вручную: наведи курсор на
+строку состояния и нажми «🌐 Сменить язык» внизу подсказки, либо палитра команд →
+«Claude Code Statusbar: Switch language», либо Настройки → `ccStatusbar.language`._
 
 ## How it gets data
 

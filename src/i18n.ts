@@ -51,6 +51,7 @@ export interface Messages {
   quotaStateMsg: Record<Exclude<QuotaState, "ok">, string>;
   localAlwaysAccurate: string;
   legend: string;
+  switchLang: string; // tooltip link label → ccStatusbar.switchLanguage
 }
 
 const EN: Messages = {
@@ -72,8 +73,8 @@ const EN: Messages = {
   quotaReset: (remaining) => ` · resets in ${remaining}`,
   verdict: {
     normal: "on track",
-    tight: "cutting it close",
-    over: "spending faster than the limit",
+    tight: "running tight",
+    over: "over pace",
   },
   quotaUnavail: (msg) => `_Quota 5h/7d: ${msg}._`,
   quotaStateMsg: {
@@ -83,7 +84,8 @@ const EN: Messages = {
     error: "temporarily unavailable (request failed)",
   },
   localAlwaysAccurate: "_The numbers above come from the local transcript — always accurate._",
-  legend: "_Dot color: 🟢 on track · 🟡 tight · 🔴 over pace. Click to refresh._",
+  legend: "_Dot color: 🟢 on track · 🟡 running tight · 🔴 over pace. Click the item to refresh._",
+  switchLang: "🌐 Change language",
 };
 
 const RU: Messages = {
@@ -104,9 +106,9 @@ const RU: Messages = {
   tariffHeader: "**Тариф (реальный, с сервера):**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,
   verdict: {
-    normal: "идём в график",
-    tight: "впритык к лимиту",
-    over: "тратим быстрее лимита",
+    normal: "в норме",
+    tight: "близко к лимиту",
+    over: "выше нормы",
   },
   quotaUnavail: (msg) => `_Тариф 5ч/7д: ${msg}._`,
   quotaStateMsg: {
@@ -116,7 +118,8 @@ const RU: Messages = {
     error: "временно недоступен (запрос не прошёл)",
   },
   localAlwaysAccurate: "_Числа выше — из локального транскрипта, всегда точны._",
-  legend: "_Цвет точки: 🟢 в норме · 🟡 впритык · 🔴 опережение. Клик — обновить._",
+  legend: "_Цвет точки: 🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы. Клик по строке — обновить._",
+  switchLang: "🌐 Сменить язык",
 };
 
 const TABLE: Record<Lang, Messages> = { en: EN, ru: RU };

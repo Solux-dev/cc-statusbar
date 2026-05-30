@@ -1,6 +1,7 @@
 {
   "ccStatusbar.cmd.refresh": "Claude Code Statusbar: Refresh now",
   "ccStatusbar.cmd.toggleQuota": "Claude Code Statusbar: Toggle 5h/7d quota polling",
+  "ccStatusbar.cmd.switchLanguage": "Claude Code Statusbar: Switch language",
   "ccStatusbar.cfg.language": "Language of the status bar and its tooltip.",
   "ccStatusbar.cfg.language.auto": "Follow the editor's display language (Russian for ru*, English otherwise)"
 }

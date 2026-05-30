@@ -106,6 +106,8 @@ export function buildView(
   }
   t.push("");
   t.push(m.legend);
+  t.push("");
+  t.push(`[${m.switchLang}](command:ccStatusbar.switchLanguage)`);
 
   return { text, tooltip: t.join("\n"), level };
 }

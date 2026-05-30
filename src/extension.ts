@@ -90,7 +90,9 @@ async function tick() {
   const view = buildView(totals, conf.weights, quotaView, nowSec, lang);
   item.text = view.text;
   const md = new vscode.MarkdownString(view.tooltip);
-  md.isTrusted = false;
+  // trusted so the "change language" command link in the tooltip is clickable;
+  // only our own ccStatusbar.* command is referenced.
+  md.isTrusted = { enabledCommands: ["ccStatusbar.switchLanguage"] };
   item.tooltip = md;
   item.backgroundColor =
     view.level === "over"
@@ -125,6 +127,22 @@ export function activate(context: vscode.ExtensionContext) {
       const cur = c.get<boolean>("quota.enabled", true);
       await c.update("quota.enabled", !cur, vscode.ConfigurationTarget.Global);
       void tick();
+    }),
+    vscode.commands.registerCommand("ccStatusbar.switchLanguage", async () => {
+      const items: Array<vscode.QuickPickItem & { value: LangSetting }> = [
+        { label: "Auto", description: "follow the editor · язык редактора", value: "auto" },
+        { label: "English", value: "en" },
+        { label: "Русский", value: "ru" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: "Status bar language · Язык строки состояния",
+      });
+      if (pick) {
+        await vscode.workspace
+          .getConfiguration("ccStatusbar")
+          .update("language", pick.value, vscode.ConfigurationTarget.Global);
+        void tick();
+      }
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("ccStatusbar")) {

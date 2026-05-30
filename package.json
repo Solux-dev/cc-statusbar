@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude Code Cost Statusbar",
   "description": "Live Claude Code token consumption (work / effective / cache), tokens-per-active-hour and real 5h/7d subscription quota in the VS Code status bar. Reads local transcripts; optionally fetches real rate limits.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -42,6 +42,10 @@
       {
         "command": "ccStatusbar.toggleQuota",
         "title": "%ccStatusbar.cmd.toggleQuota%"
+      },
+      {
+        "command": "ccStatusbar.switchLanguage",
+        "title": "%ccStatusbar.cmd.switchLanguage%"
       }
     ],
     "configuration": {
