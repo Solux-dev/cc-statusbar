@@ -1,0 +1,6 @@
+{
+  "ccStatusbar.cmd.refresh": "Claude Code Statusbar: обновить сейчас",
+  "ccStatusbar.cmd.toggleQuota": "Claude Code Statusbar: вкл/выкл опрос тарифа 5ч/7д",
+  "ccStatusbar.cfg.language": "Язык строки статуса и подсказки.",
+  "ccStatusbar.cfg.language.auto": "Следовать языку редактора (русский для ru*, иначе английский)"
+}

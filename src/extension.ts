@@ -6,6 +6,7 @@ import { readSessionTotals } from "./transcript";
 import { fetchQuota, shouldPoll, QuotaResult } from "./quota";
 import { buildView, QuotaView } from "./render";
 import { Weights } from "./metrics";
+import { resolveLang, messages, LangSetting } from "./i18n";
 
 let item: vscode.StatusBarItem;
 let timer: NodeJS.Timeout | undefined;
@@ -29,6 +30,7 @@ function cfg() {
     quotaEnabled: c.get<boolean>("quota.enabled", true),
     minPollSeconds: c.get<number>("quota.minPollSeconds", 300),
     credentialsPath: c.get<string>("credentialsPath", ""),
+    language: c.get<LangSetting>("language", "auto"),
   };
 }
 
@@ -44,10 +46,12 @@ async function tick() {
     item.hide();
     return;
   }
+  const lang = resolveLang(conf.language, vscode.env.language);
+  const m = messages(lang);
   const cwd = workspaceCwd();
   if (!cwd) {
-    item.text = "$(pulse) cc: нет папки";
-    item.tooltip = "Откройте папку проекта.";
+    item.text = m.noFolder;
+    item.tooltip = m.noFolderTip;
     item.show();
     return;
   }
@@ -83,7 +87,7 @@ async function tick() {
       : { fiveH: null, sevenD: null, state: "error" };
   }
 
-  const view = buildView(totals, conf.weights, quotaView, nowSec);
+  const view = buildView(totals, conf.weights, quotaView, nowSec, lang);
   item.text = view.text;
   const md = new vscode.MarkdownString(view.tooltip);
   md.isTrusted = false;

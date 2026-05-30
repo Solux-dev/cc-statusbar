@@ -73,26 +73,28 @@ export function fmtTokens(n: number): string {
   return String(Math.round(n));
 }
 
-/** Time-until-reset: "—" / "38м" / "2ч41м" / "4д3ч". */
-export function fmtRemaining(seconds: number): string {
+/** Time-until-reset with language-specific unit suffixes.
+ *  e.g. en: "—" / "38m" / "2h41m" / "4d3h" · ru: "38м" / "2ч41м" / "4д3ч". */
+export function fmtRemaining(seconds: number, units: { d: string; h: string; m: string }): string {
   const secs = Math.floor(seconds);
   if (secs <= 0) return "—";
   const days = Math.floor(secs / 86400);
   const hours = Math.floor((secs % 86400) / 3600);
   const mins = Math.floor((secs % 3600) / 60);
-  if (days > 0) return `${days}д${hours}ч`;
-  if (hours > 0) return `${hours}ч${String(mins).padStart(2, "0")}м`;
-  return `${mins}м`;
+  if (days > 0) return `${days}${units.d}${hours}${units.h}`;
+  if (hours > 0) return `${hours}${units.h}${String(mins).padStart(2, "0")}${units.m}`;
+  return `${mins}${units.m}`;
 }
 
 /** Pace projection: will the current burn fit the window before reset?
- *  Mirrors statusline.py quota_segment logic. */
+ *  Mirrors statusline.py quota_segment logic. Returns the level only;
+ *  the human-readable verdict label is localized at render time. */
 export function paceLevel(
   pct: number,
   resetAt: number | null,
   nowSec: number,
   windowSeconds: number
-): { level: PaceLevel; label: string } {
+): PaceLevel {
   let level: PaceLevel = "normal";
   if (resetAt) {
     const remaining = resetAt - nowSec;
@@ -105,8 +107,7 @@ export function paceLevel(
       }
     }
   }
-  const label = level === "over" ? "опережение" : level === "tight" ? "впритык" : "в норме";
-  return { level, label };
+  return level;
 }
 
 /** The worse of two pace levels (for the whole status-bar item color). */

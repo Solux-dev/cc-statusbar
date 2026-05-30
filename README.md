@@ -7,25 +7,47 @@ leaving the editor.
 
 ## What it shows
 
-Compact status-bar line (click to refresh):
+Compact status-bar line (click to refresh) — when the real quota is available
+it shows **tariff only**, per window:
 
+```text
+🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h)
 ```
-$(pulse) эфф 4.7M · 5ч 24% · 7д 41%
-```
+
+When the quota channel is off/unavailable it falls back to the always-accurate
+local number: `$(pulse) eff 4.7M`.
 
 Hover for the full breakdown (tooltip):
 
-- **работа** (input + output) — raw work tokens
-- **эффективно** — cache-weighted comparable metric:
+- **work** (input + output) — raw work tokens
+- **effective** — cache-weighted comparable metric:
   `effective = work + 0.1·cache_read + 1.25·cache_write`
-- **кэш** read / write + estimated **экономия**
-- **темп** — effective tokens per hour of active work
-- **5ч / 7д** real subscription quota: % used, colored bar, reset countdown,
-  and a pace verdict (`в норме` / `впритык` / `опережение`) — the **whole item
-  turns yellow/red** when the current burn pace risks exceeding a window.
+- **cache** read / write + estimated **savings**
+- **pace** — effective tokens per hour of active work
+- **5h / 7d** real subscription quota: % used, colored bar, reset countdown,
+  and a plain-language verdict (`on track` / `cutting it close` /
+  `spending faster than the limit`) — the **whole item turns yellow/red** when
+  the current burn pace risks exceeding a window.
 
 The `effective` formula matches the project's `tools/session-cost.py` /
 `docs/cost-metrics.md`, so the bar agrees with the end-of-session reports.
+
+## Glossary — what you see / Что вы видите
+
+| In the bar/tooltip | English | По-русски |
+|--------------------|---------|-----------|
+| 🟢 | on track — at this pace you'll comfortably fit the window | в норме — при таком темпе уложитесь в окно |
+| 🟡 | cutting it close — near the limit before reset | впритык — близко к лимиту до сброса |
+| 🔴 | spending faster than the limit — may run out before reset | опережение — тратите быстрее лимита, можете упереться до сброса |
+| `5h` / `7d` | your two rolling subscription windows (5-hour and 7-day) | два окна подписки (за 5 часов и за 7 дней) |
+| `work` / работа | tokens actually sent + received this session | реально отправленные + полученные токены за сессию |
+| `effective` / эффективно | one comparable number that fairly counts cache (cheap to read, costly to write) | единое сравнимое число, честно учитывающее кэш |
+| `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
+| `pace` / темп | effective tokens per hour of active work | эффективных токенов в час активной работы |
+| resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
+
+The plugin's language follows the editor automatically; set
+`ccStatusbar.language` to `en` or `ru` to force one.
 
 ## How it gets data
 
@@ -52,7 +74,7 @@ small and MIT-licensed — read `src/quota.ts` to verify.
 npm install
 npm run compile
 npm run package        # produces cc-statusbar-<version>.vsix
-code --install-extension cc-statusbar-0.1.0.vsix
+code --install-extension cc-statusbar-0.2.0.vsix
 ```
 
 Reload VS Code. The item appears on the right of the status bar.
@@ -61,6 +83,7 @@ Reload VS Code. The item appears on the right of the status bar.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
+| `language` | `auto` | Plugin language: `auto` (follow editor) / `en` / `ru` |
 | `enabled` | `true` | Show the item |
 | `refreshSeconds` | `10` | Redraw interval |
 | `alignment` | `right` | Status-bar side |
@@ -70,30 +93,25 @@ Reload VS Code. The item appears on the right of the status bar.
 | `quota.minPollSeconds` | `300` | Min seconds between quota calls |
 | `credentialsPath` | `""` | Override credentials file location |
 
-## Resilience
+## Reliability — what can temporarily break (important)
 
-If Anthropic changes the auth/quota mechanism, **only `src/quota.ts` needs a
-patch** — the local token/effective/cache metrics keep working, and the bar
-gracefully hides the tariff line until fixed.
+The plugin has two parts with different reliability:
 
-## Reliability — что может временно не работать (важно)
+- **Local metrics** (`work` / `effective` / `cache` / savings) are read from the
+  local transcript files. They **always work** and depend on nothing external.
+- **The real 5h/7d quota** comes from an **undocumented** Anthropic channel (the
+  API response headers, read with your local OAuth token). If Anthropic changes
+  that mechanism, **only the tariff line stops showing** — the plugin does not
+  break: all local metrics keep working and the tariff is simply hidden with a
+  "temporarily unavailable" note. Because only `src/quota.ts` touches that
+  channel, a fix is a small, isolated patch.
 
-Плагин состоит из двух частей с разной надёжностью:
+**What the user does:** nothing. When the channel changes, a fix is released and
+— if installed from the Marketplace — **arrives as an automatic update**.
 
-- **Локальные метрики** (`работа` / `эффективно` / `кэш` / экономия) — читаются из
-  локальных файлов транскрипта. **Работают всегда**, ни от чего внешнего не зависят.
-- **Реальный тариф 5ч/7д** — берётся через **недокументированный** канал Anthropic
-  (заголовки ответа API с вашим локальным OAuth-токеном). Если Anthropic изменит
-  этот механизм — **временно перестанет показываться только строка тарифа** (плагин
-  не ломается целиком: все локальные метрики продолжают работать, тариф просто
-  скрывается с пометкой «временно недоступен»).
-
-**Что делать пользователю:** ничего. Когда канал меняется, выпускается исправление,
-и при установке из Marketplace оно **прилетает авто-обновлением** само.
-
-Это **best-effort**-инструмент, распространяется по лицензии MIT «как есть», без
-гарантий. Проблемы с тарифом обычно **не по вине плагина**, а из-за изменений на
-стороне Anthropic — и устраняются обновлением.
+This is a **best-effort** tool, distributed under the MIT license "as is",
+without warranty. Tariff problems are usually **not the plugin's fault** but a
+change on Anthropic's side, and are resolved by an update.
 
 ## License
 
