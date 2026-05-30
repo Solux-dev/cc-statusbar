@@ -1,0 +1,102 @@
+{
+  "name": "cc-statusbar",
+  "displayName": "Claude Code Cost Statusbar",
+  "description": "Live Claude Code token consumption (work / effective / cache), tokens-per-active-hour and real 5h/7d subscription quota in the VS Code status bar. Reads local transcripts; optionally fetches real rate limits.",
+  "version": "0.1.0",
+  "publisher": "honor",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "tokens",
+    "usage",
+    "cost",
+    "statusbar"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/honor/cc-statusbar"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ccStatusbar.refresh",
+        "title": "Claude Code Statusbar: Refresh now"
+      },
+      {
+        "command": "ccStatusbar.toggleQuota",
+        "title": "Claude Code Statusbar: Toggle 5h/7d quota polling"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Code Cost Statusbar",
+      "properties": {
+        "ccStatusbar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the status bar item."
+        },
+        "ccStatusbar.refreshSeconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 3,
+          "description": "How often (seconds) to re-read the session transcript and redraw."
+        },
+        "ccStatusbar.alignment": {
+          "type": "string",
+          "enum": ["left", "right"],
+          "default": "right",
+          "description": "Status bar side."
+        },
+        "ccStatusbar.cacheReadWeight": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Weight of cache-read tokens in the `effective` metric (cache read ≈ 10% of a fresh input token). Keep in sync with tools/session-cost.py."
+        },
+        "ccStatusbar.cacheWriteWeight": {
+          "type": "number",
+          "default": 1.25,
+          "description": "Weight of cache-write tokens in the `effective` metric (cache write ≈ 125%). Keep in sync with tools/session-cost.py."
+        },
+        "ccStatusbar.quota.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fetch REAL 5h/7d subscription quota from Anthropic (costs ~1 token per poll, only while active). Turn off to keep only free transcript-based metrics."
+        },
+        "ccStatusbar.quota.minPollSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "description": "Minimum seconds between quota API calls (throttle to avoid rate-limit 429). Polls only when the session was recently active."
+        },
+        "ccStatusbar.credentialsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to Claude credentials JSON (default: ~/.claude/.credentials.json)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node --test out/test/logic.test.js",
+    "package": "npx --yes @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
