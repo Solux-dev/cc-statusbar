@@ -22,7 +22,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/honor/cc-statusbar"
+    "url": "https://github.com/Solux-dev/cc-statusbar.git"
+  },
+  "homepage": "https://github.com/Solux-dev/cc-statusbar#readme",
+  "bugs": {
+    "url": "https://github.com/Solux-dev/cc-statusbar/issues"
   },
   "main": "./out/extension.js",
   "activationEvents": [
