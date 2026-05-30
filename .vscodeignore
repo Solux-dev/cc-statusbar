@@ -10,3 +10,6 @@ tsconfig.json
 *.vsix
 node_modules/**
 package-lock.json
+media/make_icon.py
+media/icon-256.png
+media/screenshot-*.png

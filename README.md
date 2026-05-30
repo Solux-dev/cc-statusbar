@@ -10,6 +10,13 @@ leaving the editor.
 **Install:** search **“Claude Code Cost Statusbar”** in the VS Code Extensions
 view, or run `code --install-extension solux-dev.cc-statusbar`.
 
+| English | Русский |
+|---------|---------|
+| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png) |
+
+The collapsed bar lives at the bottom-right of the status bar; hover it for the
+full breakdown shown above.
+
 ## What it shows
 
 Compact status-bar line (click to refresh) — when the real quota is available

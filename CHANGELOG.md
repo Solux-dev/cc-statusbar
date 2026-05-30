@@ -3,6 +3,13 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1] — 2026-05-30
+
+### Added
+
+- Extension icon (coral tile with a usage-gauge and a green "on-track" dot).
+- Screenshots (English + Russian tooltip) in the README.
+
 ## [0.2.0] — 2026-05-30
 
 ### Added
