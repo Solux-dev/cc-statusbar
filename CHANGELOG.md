@@ -12,6 +12,15 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   the full breakdown — so you can keep it open and study it, instead of relying
   on the auto-hiding hover tooltip. Clicking the status-bar item still refreshes.
 
+### Changed
+
+- **Clearer cache savings.** Instead of an abstract “saved vs no-cache” line,
+  the tooltip and panel now show the two totals side by side — *without caching
+  ≈ X* vs *with caching (effective) ≈ Y → saved ≈ Z* — so the benefit of caching
+  is obvious at a glance (RU: «без кэша было бы… / с кэшем…»).
+- Removed the unimplemented “pace” line that was documented but never shown
+  (the extension does not measure active work time).
+
 ## [0.2.2] — 2026-05-30
 
 ### Added

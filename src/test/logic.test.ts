@@ -117,8 +117,8 @@ test("buildView (ru): ok state shows tariff-only bar (dots + 5ч/7д), эфф in
   assert.match(v.text, /7д 41%/);
   assert.ok(!/эфф/.test(v.text), "effective must NOT be in collapsed bar");
   // analytical numbers live in the tooltip, decomposition sums to effective
-  assert.match(v.tooltip, /эффективно: \*\*2\.5M\*\*/);
-  assert.match(v.tooltip, /на кэш/);
+  assert.match(v.tooltip, /с кэшем \(эффективно\) ≈ \*\*2\.5M\*\*/);
+  assert.match(v.tooltip, /без кэша было бы ≈ \*\*11\.2M\*\*/);
 });
 
 test("buildView (en): ok state, english bar + tooltip", () => {
@@ -131,7 +131,8 @@ test("buildView (en): ok state, english bar + tooltip", () => {
   }, now, "en");
   assert.match(v.text, /🟢 5h 24%/);
   assert.match(v.text, /7d 41%/);
-  assert.match(v.tooltip, /effective: \*\*2\.5M\*\*/);
+  assert.match(v.tooltip, /with caching \(effective\) ≈ \*\*2\.5M\*\*/);
+  assert.match(v.tooltip, /without caching ≈ \*\*11\.2M\*\*/);
   assert.match(v.tooltip, /Subscription quota/);
   assert.match(v.tooltip, /on track/);
 });
@@ -181,11 +182,14 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 }, sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 } };
   const en = buildPanelHtml(totals, W, q, now, "en");
   assert.match(en, /^<!DOCTYPE html>/);
-  assert.match(en, /= Effective/);
+  assert.match(en, /Without caching/);
+  assert.match(en, /With caching \(effective\)/);
   assert.match(en, /2\.5M/);
+  assert.match(en, /11\.2M/);
   assert.match(en, /Subscription quota/);
   const ru = buildPanelHtml(totals, W, q, now, "ru");
-  assert.match(ru, /Эффективно/);
+  assert.match(ru, /Без кэша было бы/);
+  assert.match(ru, /С кэшем \(эффективно\)/);
   assert.match(ru, /Тариф/);
 });
 

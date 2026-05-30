@@ -47,12 +47,13 @@ export function buildView(
   weights: Weights,
   quota: QuotaView,
   nowSec: number,
-  lang: Lang = "en",
-  apiActiveMs = 0
+  lang: Lang = "en"
 ): View {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
-  const cacheCost = Math.max(0, eff - totals.work); // cache portion inside effective
+  // raw face-value cost if caching didn't exist: every token at 1× price.
+  const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
+  const saved = Math.max(0, noCache - eff); // exactly the displayed difference
 
   // ── collapsed bar: tariff-only, per-window dot + % + reset ──
   const segs: string[] = [];
@@ -79,14 +80,9 @@ export function buildView(
   t.push(m.title);
   t.push("");
   t.push(m.workLine(fmtTokens(totals.work), fmtTokens(totals.input), fmtTokens(totals.output)));
-  t.push(m.cacheInEff(fmtTokens(cacheCost)));
-  t.push(m.effLine(fmtTokens(eff)));
-  const saved = Math.max(0, 0.9 * totals.cacheRead - 0.25 * totals.cacheWrite);
-  t.push(m.cacheLine(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite), fmtTokens(saved)));
-  if (apiActiveMs >= 1000) {
-    const perHr = eff / (apiActiveMs / 3_600_000);
-    t.push(m.paceLine(fmtTokens(perHr)));
-  }
+  t.push(m.cacheRaw(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)));
+  t.push(m.noCacheLine(fmtTokens(noCache)));
+  t.push(m.withCacheLine(fmtTokens(eff), fmtTokens(saved)));
   t.push("");
 
   const quotaLine = (label: string, w: QuotaWindow | null, windowSec: number): string => {
@@ -124,24 +120,20 @@ export function buildPanelHtml(
   weights: Weights,
   quota: QuotaView,
   nowSec: number,
-  lang: Lang = "en",
-  apiActiveMs = 0
+  lang: Lang = "en"
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
-  const cacheCost = Math.max(0, eff - totals.work);
-  const saved = Math.max(0, 0.9 * totals.cacheRead - 0.25 * totals.cacheWrite);
+  const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
+  const saved = Math.max(0, noCache - eff);
 
   const rows: string[] = [];
   rows.push(`<div class="row"><span>${esc(m.panelWork)}</span><b>${fmtTokens(totals.work)} ${esc(m.tok)}</b></div>`);
   rows.push(`<div class="sub">${esc(m.panelInOut(fmtTokens(totals.input), fmtTokens(totals.output)))}</div>`);
-  rows.push(`<div class="row"><span>${esc(m.panelCache)}</span><b>~${fmtTokens(cacheCost)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="row big"><span>${esc(m.panelEffective)}</span><b>${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="sub">${esc(m.panelCacheDetail(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite), fmtTokens(saved)))}</div>`);
-  if (apiActiveMs >= 1000) {
-    const perHr = eff / (apiActiveMs / 3_600_000);
-    rows.push(`<div class="sub">${esc(m.panelPace(fmtTokens(perHr)))}</div>`);
-  }
+  rows.push(`<div class="row"><span>${esc(m.panelCacheLabel)}</span><b>${esc(m.panelCacheValue(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)))}</b></div>`);
+  rows.push(`<div class="row"><span>${esc(m.panelNoCache)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="row big"><span>${esc(m.panelWithCache)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="sub">${esc(m.panelSaved(fmtTokens(saved)))}</div>`);
 
   const quotaBlock: string[] = [];
   const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {

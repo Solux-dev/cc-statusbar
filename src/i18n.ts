@@ -40,10 +40,9 @@ export interface Messages {
   // tooltip
   title: string;
   workLine: (work: string, input: string, output: string) => string;
-  cacheInEff: (cache: string) => string;
-  effLine: (eff: string) => string;
-  cacheLine: (read: string, write: string, saved: string) => string;
-  paceLine: (perHour: string) => string;
+  cacheRaw: (read: string, write: string) => string;
+  noCacheLine: (noCache: string) => string;
+  withCacheLine: (withCache: string, saved: string) => string;
   tariffHeader: string;
   quotaReset: (remaining: string) => string;
   verdict: Record<PaceLevel, string>;
@@ -58,10 +57,11 @@ export interface Messages {
   tok: string;
   panelWork: string;
   panelInOut: (input: string, output: string) => string;
-  panelCache: string;
-  panelEffective: string;
-  panelCacheDetail: (read: string, write: string, saved: string) => string;
-  panelPace: (perHour: string) => string;
+  panelCacheLabel: string;
+  panelCacheValue: (read: string, write: string) => string;
+  panelNoCache: string;
+  panelWithCache: string;
+  panelSaved: (saved: string) => string;
   panelQuotaHeader: string;
   panelLocalAccurate: string;
   panelLegend: string;
@@ -77,11 +77,10 @@ const EN: Messages = {
   title: "**Claude Code — session usage**",
   workLine: (work, input, output) =>
     `- work (in + out): **${work}** tok (in ${input} / out ${output})`,
-  cacheInEff: (cache) => `- + cache (counted in eff.): **~${cache}** tok`,
-  effLine: (eff) => `- = effective: **${eff}** tok`,
-  cacheLine: (read, write, saved) =>
-    `- cache: read ${read} / write ${write} · saved vs no-cache ≈${saved}`,
-  paceLine: (perHour) => `- pace: ~${perHour} eff·tok/h (by active time)`,
+  cacheRaw: (read, write) => `- cache: read ${read} / write ${write}`,
+  noCacheLine: (noCache) => `- without caching ≈ **${noCache}** tok`,
+  withCacheLine: (withCache, saved) =>
+    `- with caching (effective) ≈ **${withCache}** tok → saved ≈ **${saved}**`,
   tariffHeader: "**Subscription quota (real, from server):**",
   quotaReset: (remaining) => ` · resets in ${remaining}`,
   verdict: {
@@ -104,11 +103,11 @@ const EN: Messages = {
   tok: "tok",
   panelWork: "Work (input + output)",
   panelInOut: (input, output) => `input ${input} / output ${output}`,
-  panelCache: "+ cache (counted in effective)",
-  panelEffective: "= Effective",
-  panelCacheDetail: (read, write, saved) =>
-    `cache: read ${read} / write ${write} · saved vs no-cache ≈${saved}`,
-  panelPace: (perHour) => `pace: ~${perHour} eff·tok/h (by active time)`,
+  panelCacheLabel: "Cache (read / write)",
+  panelCacheValue: (read, write) => `${read} / ${write}`,
+  panelNoCache: "Without caching",
+  panelWithCache: "With caching (effective)",
+  panelSaved: (saved) => `saved ≈ ${saved}`,
   panelQuotaHeader: "Subscription quota (real, from server)",
   panelLocalAccurate: "The numbers above come from the local transcript — always accurate.",
   panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
@@ -124,11 +123,10 @@ const RU: Messages = {
   title: "**Claude Code — расход сессии**",
   workLine: (work, input, output) =>
     `- работа (вход + выход): **${work}** ток (вход ${input} / выход ${output})`,
-  cacheInEff: (cache) => `- + на кэш (учтено в эфф.): **~${cache}** ток`,
-  effLine: (eff) => `- = эффективно: **${eff}** ток`,
-  cacheLine: (read, write, saved) =>
-    `- кэш: чтение ${read} / запись ${write} · сэкономлено vs без кэша ≈${saved}`,
-  paceLine: (perHour) => `- темп: ~${perHour} эфф·ток/ч (по активному времени)`,
+  cacheRaw: (read, write) => `- кэш: чтение ${read} / запись ${write}`,
+  noCacheLine: (noCache) => `- без кэша было бы ≈ **${noCache}** ток`,
+  withCacheLine: (withCache, saved) =>
+    `- с кэшем (эффективно) ≈ **${withCache}** ток → экономия ≈ **${saved}**`,
   tariffHeader: "**Тариф (реальный, с сервера):**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,
   verdict: {
@@ -151,11 +149,11 @@ const RU: Messages = {
   tok: "ток",
   panelWork: "Работа (вход + выход)",
   panelInOut: (input, output) => `вход ${input} / выход ${output}`,
-  panelCache: "+ на кэш (учтено в эффективном)",
-  panelEffective: "= Эффективно",
-  panelCacheDetail: (read, write, saved) =>
-    `кэш: чтение ${read} / запись ${write} · сэкономлено vs без кэша ≈${saved}`,
-  panelPace: (perHour) => `темп: ~${perHour} эфф·ток/ч (по активному времени)`,
+  panelCacheLabel: "Кэш (чтение / запись)",
+  panelCacheValue: (read, write) => `${read} / ${write}`,
+  panelNoCache: "Без кэша было бы",
+  panelWithCache: "С кэшем (эффективно)",
+  panelSaved: (saved) => `экономия ≈ ${saved}`,
   panelQuotaHeader: "Тариф (реальный, с сервера)",
   panelLocalAccurate: "Числа выше — из локального транскрипта, всегда точны.",
   panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",

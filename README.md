@@ -34,10 +34,11 @@ local number: `$(pulse) eff 4.7M`.
 Hover for the full breakdown (tooltip):
 
 - **work** (input + output) — raw work tokens
-- **effective** — cache-weighted comparable metric:
+- **cache** read / write — reused-context tokens
+- **without caching** vs **with caching (effective)** — the two totals side by
+  side, so you see exactly how much caching saved this session. “Effective” is
+  the cache-weighted comparable number:
   `effective = work + 0.1·cache_read + 1.25·cache_write`
-- **cache** read / write + estimated **savings**
-- **pace** — effective tokens per hour of active work
 - **5h / 7d** real subscription quota: % used, colored bar, reset countdown,
   and a plain-language verdict (`on track` / `running tight` / `over pace`) —
   the **whole item turns yellow/red** when the current burn pace risks
@@ -57,7 +58,6 @@ The `effective` formula matches the project's `tools/session-cost.py` /
 | `work` / работа | tokens actually sent + received this session | реально отправленные + полученные токены за сессию |
 | `effective` / эффективно | one comparable number that fairly counts cache (cheap to read, costly to write) | единое сравнимое число, честно учитывающее кэш |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
-| `pace` / темп | effective tokens per hour of active work | эффективных токенов в час активной работы |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
 
 ### Language / Язык
