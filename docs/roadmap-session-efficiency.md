@@ -55,6 +55,24 @@ chats finish at once. Final design:
   simultaneous-finish case is acceptable (nice-to-have metric, not critical).
 - **NOT** in the user's project repo (no clutter, no git noise) — home dir only.
 
+## Persistence is OPT-IN (owner decision 2026-05-31)
+
+A setting `ccStatusbar.efficiency.persist` (boolean, **default `false`**):
+
+- **OFF (default):** **no files written at all** (plugin only reads transcripts).
+  Panel/tooltip still show the **current session's** efficiency live
+  (cost/active-hour, cache-hit rate, idle %). The user decides whether to record
+  it elsewhere. No surprise files on disk → privacy-respecting default.
+- **ON:** write the per-session files (race-safe, capped, home dir) → unlocks the
+  **cross-session trend** ("this session vs your average / last N").
+
+Rationale: saving is a deliberate user choice, not imposed. Visual-only users
+get full in-the-moment value with zero disk writes.
+
+**Discoverability note:** since the cross-session trend is the main payoff but
+sits behind the toggle, show a gentle one-time hint in the panel ("enable
+session history to see efficiency trends") — informative, not nagging.
+
 ## MVP boundary
 
 Out of scope for now. Implement only after the context-% (0.4.0) lands and we
