@@ -1,9 +1,14 @@
 # Claude Code Cost Statusbar
 
+[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/solux-dev.cc-statusbar?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
+
 A VS Code status-bar item showing **live Claude Code consumption** for the
 active session, in **tokens** — plus the **real 5-hour / 7-day subscription
 quota**. Built for subscription users who want an at-a-glance cockpit without
 leaving the editor.
+
+**Install:** search **“Claude Code Cost Statusbar”** in the VS Code Extensions
+view, or run `code --install-extension solux-dev.cc-statusbar`.
 
 ## What it shows
 
@@ -68,7 +73,13 @@ Anthropic's own API for quota headers. **No telemetry, no third-party servers,
 no data leaves your machine** (other than that one Anthropic call). The code is
 small and MIT-licensed — read `src/quota.ts` to verify.
 
-## Install (local, no marketplace)
+## Install
+
+**From the Marketplace (recommended):** search **“Claude Code Cost Statusbar”**
+in the Extensions view, or run `code --install-extension solux-dev.cc-statusbar`.
+Updates arrive automatically.
+
+**Build locally (for development):**
 
 ```bash
 npm install
