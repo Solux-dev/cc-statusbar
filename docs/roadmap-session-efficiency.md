@@ -1,7 +1,11 @@
 # Roadmap idea — "Session efficiency" (post-MVP)
 
-Status: **captured, not scheduled.** MVP shipped 2026-05-31 (v0.3.1; 0.4.0 =
-context % next). Revisit after real usage / user feedback (GitHub issues).
+Status: **SHELVED (2026-05-31).** Not killed — deliberately parked. See
+[`product-direction.md`](product-direction.md) for the reasoning: the metrics
+here (eff/active-hour, cache-hit-rate) turned out to be confounded (high value
+can mean "worked hard" OR "wasted money" — indistinguishable), and demand is
+unvalidated. The one clean signal is idle-gap → context re-cache. Revisit only
+via the research tasks in `product-direction.md`, not by building this as-is.
 
 ## The problem with the current numbers
 
