@@ -114,7 +114,7 @@ produces a genuinely correct, actionable, broadly-useful signal.
 
 ## Release status reminder
 
-- v0.4.0: code committed + pushed to GitHub (`f7f6835`). Marketplace publish =
-  owner does it manually (`cc-statusbar-0.4.0.vsix` already built).
-- Git tags lag (only `v0.2.0` exists; 0.3.x / 0.4.0 untagged) — optionally tag
-  `v0.4.0` for a complete release history.
+- v0.4.0: code committed + pushed (`f7f6835`); tag `v0.4.0` + GitHub Release
+  created (now Latest, `.vsix` attached). Marketplace publish = owner does it
+  manually (`cc-statusbar-0.4.0.vsix` already built).
+- All versions 0.2.0–0.4.0 now tagged + released on GitHub.

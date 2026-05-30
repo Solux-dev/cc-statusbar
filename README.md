@@ -2,10 +2,10 @@
 
 [![Marketplace](https://img.shields.io/visual-studio-marketplace/v/solux-dev.cc-statusbar?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
 
-A VS Code status-bar item showing **live Claude Code consumption** for the
-active session, in **tokens** — plus the **real 5-hour / 7-day subscription
-quota**. Built for subscription users who want an at-a-glance cockpit without
-leaving the editor.
+A VS Code status-bar item showing your **real 5-hour / 7-day Claude Code
+subscription quota** and **how full the model's context window is right now** —
+plus **live token consumption** for the active session. Built for subscription
+users who want an at-a-glance cockpit without leaving the editor.
 
 **Install:** search **“Claude Code Cost Statusbar”** in the VS Code Extensions
 view, or run `code --install-extension solux-dev.cc-statusbar`.
@@ -22,11 +22,17 @@ the tooltip (or run *“Claude Code Statusbar: Open usage panel”*) to dock a
 ## What it shows
 
 Compact status-bar line (click to refresh) — when the real quota is available
-it shows **tariff only**, per window:
+it shows the **tariff** per window, then the **context-window fill**:
 
 ```text
-🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h)
+🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · ctx 47%
 ```
+
+`ctx 47%` is how full the model's context window is right now (current input ÷
+the model's window limit). It gets its own warning dot at ≥85% (yellow) and
+≥95% (red), but — unlike the tariff — it does **not** recolour the whole item,
+because "how full" and "burn pace" are two different things. If the window limit
+can't be fetched, the `ctx` segment is simply hidden (the % is never guessed).
 
 When the quota channel is off/unavailable it falls back to the always-accurate
 local number: `$(pulse) eff 4.7M`.
@@ -43,6 +49,10 @@ Hover for the full breakdown (tooltip):
   and a plain-language verdict (`on track` / `running tight` / `over pace`) —
   the **whole item turns yellow/red** when the current burn pace risks
   exceeding a window.
+- **context** — how full the model's window is now, as a full line
+  `context: 47% (468k / 1M)`. Read once per model from the Anthropic Models API
+  (`max_input_tokens`, cached 24h); hidden entirely if the limit can't be
+  fetched (never guessed).
 
 The `effective` formula matches the project's `tools/session-cost.py` /
 `docs/cost-metrics.md`, so the bar agrees with the end-of-session reports.
@@ -58,6 +68,7 @@ The `effective` formula matches the project's `tools/session-cost.py` /
 | `work` / работа | tokens actually sent + received this session | реально отправленные + полученные токены за сессию |
 | `effective` / эффективно | one comparable number that fairly counts cache (cheap to read, costly to write) | единое сравнимое число, честно учитывающее кэш |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
+| `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
 
 ### Language / Язык
@@ -106,7 +117,7 @@ Updates arrive automatically.
 npm install
 npm run compile
 npm run package        # produces cc-statusbar-<version>.vsix
-code --install-extension cc-statusbar-0.2.0.vsix
+code --install-extension cc-statusbar-0.4.0.vsix
 ```
 
 Reload VS Code. The item appears on the right of the status bar.
