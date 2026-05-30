@@ -37,12 +37,17 @@ export interface Messages {
   effShort: string; // "eff" / "эфф" — fallback bar prefix
   w5h: string; // short window label "5h" / "5ч"
   w7d: string;
+  ctxShort: string; // collapsed-bar context label "ctx" / "конт"
   // tooltip
   title: string;
-  workLine: (work: string, input: string, output: string) => string;
-  cacheRaw: (read: string, write: string) => string;
-  noCacheLine: (noCache: string) => string;
-  withCacheLine: (withCache: string, saved: string) => string;
+  // cost-first headline: one compact line (with caching · without · ×cheaper)
+  costCompact: (withCache: string, noCache: string, mult: string) => string;
+  // muted technical breakdown (tooltip + panel "Details")
+  detailsLine: (work: string, cacheRead: string, cacheWrite: string) => string;
+  // context window fill
+  contextLine: (used: string, limit: string, pct: number) => string;
+  contextNoLimit: (used: string) => string;
+  contextLimitUnavailable: string;
   tariffHeader: string;
   quotaReset: (remaining: string) => string;
   verdict: Record<PaceLevel, string>;
@@ -55,13 +60,11 @@ export interface Messages {
   panelTitle: string; // webview panel tab title
   // webview panel (plain text — HTML provides the styling)
   tok: string;
-  panelWork: string;
-  panelInOut: (input: string, output: string) => string;
-  panelCacheLabel: string;
-  panelCacheValue: (read: string, write: string) => string;
-  panelNoCache: string;
-  panelWithCache: string;
-  panelSaved: (saved: string) => string;
+  panelCostLabel: string; // "This session cost" / "Стоило (с учётом кэша)"
+  panelNoCacheLabel: string; // "Without caching" / "Без кэша было бы"
+  panelSavedLabel: string; // "💰 Cache saved" / "💰 Экономия за счёт кэша"
+  cheaperMult: (mult: string) => string; // "(~6.8× cheaper)" / "(в ~6.8× дешевле)"
+  panelDetailsHeader: string; // "Details" / "Детали"
   panelQuotaHeader: string;
   panelLocalAccurate: string;
   panelLegend: string;
@@ -74,13 +77,15 @@ const EN: Messages = {
   effShort: "eff",
   w5h: "5h",
   w7d: "7d",
+  ctxShort: "ctx",
   title: "**Claude Code — session usage**",
-  workLine: (work, input, output) =>
-    `- work (in + out): **${work}** tok (in ${input} / out ${output})`,
-  cacheRaw: (read, write) => `- cache: read ${read} / write ${write}`,
-  noCacheLine: (noCache) => `- without caching ≈ **${noCache}** tok`,
-  withCacheLine: (withCache, saved) =>
-    `- with caching (effective) ≈ **${withCache}** tok → saved ≈ **${saved}**`,
+  costCompact: (withCache, noCache, mult) =>
+    `with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× cheaper)`,
+  detailsLine: (work, cacheRead, cacheWrite) =>
+    `work (in+out) ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
+  contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
+  contextNoLimit: (used) => `context: ${used} (limit n/a)`,
+  contextLimitUnavailable: "context limit unavailable",
   tariffHeader: "**Subscription quota (real, from server):**",
   quotaReset: (remaining) => ` · resets in ${remaining}`,
   verdict: {
@@ -101,13 +106,11 @@ const EN: Messages = {
   openPanel: "⤢ Open panel",
   panelTitle: "Claude Code — Session Usage",
   tok: "tok",
-  panelWork: "Work (input + output)",
-  panelInOut: (input, output) => `input ${input} / output ${output}`,
-  panelCacheLabel: "Cache (read / write)",
-  panelCacheValue: (read, write) => `${read} / ${write}`,
-  panelNoCache: "Without caching",
-  panelWithCache: "With caching (effective)",
-  panelSaved: (saved) => `saved ≈ ${saved}`,
+  panelCostLabel: "This session cost",
+  panelNoCacheLabel: "Without caching",
+  panelSavedLabel: "💰 Cache saved",
+  cheaperMult: (mult) => `(~${mult}× cheaper)`,
+  panelDetailsHeader: "Details",
   panelQuotaHeader: "Subscription quota (real, from server)",
   panelLocalAccurate: "The numbers above come from the local transcript — always accurate.",
   panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
@@ -120,13 +123,15 @@ const RU: Messages = {
   effShort: "эфф",
   w5h: "5ч",
   w7d: "7д",
+  ctxShort: "конт",
   title: "**Claude Code — расход сессии**",
-  workLine: (work, input, output) =>
-    `- работа (вход + выход): **${work}** ток (вход ${input} / выход ${output})`,
-  cacheRaw: (read, write) => `- кэш: чтение ${read} / запись ${write}`,
-  noCacheLine: (noCache) => `- без кэша было бы ≈ **${noCache}** ток`,
-  withCacheLine: (withCache, saved) =>
-    `- с кэшем (эффективно) ≈ **${withCache}** ток → экономия ≈ **${saved}**`,
+  costCompact: (withCache, noCache, mult) =>
+    `с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (дешевле в ~${mult}×)`,
+  detailsLine: (work, cacheRead, cacheWrite) =>
+    `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
+  contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
+  contextNoLimit: (used) => `контекст: ${used} (лимит н/д)`,
+  contextLimitUnavailable: "лимит контекста недоступен",
   tariffHeader: "**Тариф (реальный, с сервера):**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,
   verdict: {
@@ -147,13 +152,11 @@ const RU: Messages = {
   openPanel: "⤢ Открыть панель",
   panelTitle: "Claude Code — расход сессии",
   tok: "ток",
-  panelWork: "Работа (вход + выход)",
-  panelInOut: (input, output) => `вход ${input} / выход ${output}`,
-  panelCacheLabel: "Кэш (чтение / запись)",
-  panelCacheValue: (read, write) => `${read} / ${write}`,
-  panelNoCache: "Без кэша было бы",
-  panelWithCache: "С кэшем (эффективно)",
-  panelSaved: (saved) => `экономия ≈ ${saved}`,
+  panelCostLabel: "Стоило (с учётом кэша)",
+  panelNoCacheLabel: "Без кэша было бы",
+  panelSavedLabel: "💰 Экономия за счёт кэша",
+  cheaperMult: (mult) => `(в ~${mult}× дешевле)`,
+  panelDetailsHeader: "Детали",
   panelQuotaHeader: "Тариф (реальный, с сервера)",
   panelLocalAccurate: "Числа выше — из локального транскрипта, всегда точны.",
   panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",

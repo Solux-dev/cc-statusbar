@@ -3,20 +3,28 @@
 
 import * as vscode from "vscode";
 import { readSessionTotals } from "./transcript";
-import { fetchQuota, shouldPoll, QuotaResult } from "./quota";
-import { buildView, buildPanelHtml, QuotaView } from "./render";
-import { Weights } from "./metrics";
+import { fetchQuota, fetchModelWindow, shouldPoll, QuotaResult, ModelWindowResult } from "./quota";
+import { buildView, buildPanelHtml, QuotaView, ContextView } from "./render";
+import { Weights, ContextInfo } from "./metrics";
 import { resolveLang, messages, LangSetting } from "./i18n";
 
 let item: vscode.StatusBarItem;
 let timer: NodeJS.Timeout | undefined;
 let panel: vscode.WebviewPanel | undefined;
+let extCtx: vscode.ExtensionContext | undefined;
 
 // quota state across ticks
 let lastQuota: QuotaResult | null = null;
 let lastFetchSec = 0;
 let rateLimitedUntilSec = 0;
 let inFlight = false;
+
+// model context-window limits: cached per model id (limits don't change → 24h),
+// persisted in globalState so a restart doesn't refetch. Errors retried sooner.
+const MODEL_LIMIT_TTL_SEC = 24 * 3600;
+const MODEL_LIMIT_RETRY_SEC = 600;
+const modelLimits = new Map<string, ModelWindowResult>();
+const limitInFlight = new Set<string>();
 
 function cfg() {
   const c = vscode.workspace.getConfiguration("ccStatusbar");
@@ -32,7 +40,48 @@ function cfg() {
     minPollSeconds: c.get<number>("quota.minPollSeconds", 300),
     credentialsPath: c.get<string>("credentialsPath", ""),
     language: c.get<LangSetting>("language", "auto"),
+    contextEnabled: c.get<boolean>("context.enabled", true),
   };
+}
+
+/** Resolve the cached context-window limit for a model, kicking off a
+ *  background fetch when missing/stale. Never blocks the UI tick. */
+function ensureModelLimit(id: string, credentialsPath: string, nowSec: number): ModelWindowResult | null {
+  const cached = modelLimits.get(id) || null;
+  const ttl = cached?.state === "ok" ? MODEL_LIMIT_TTL_SEC : MODEL_LIMIT_RETRY_SEC;
+  const fresh = cached !== null && nowSec - cached.fetchedAtSec < ttl;
+  if (!fresh && !limitInFlight.has(id)) {
+    limitInFlight.add(id);
+    fetchModelWindow(id, credentialsPath, nowSec)
+      .then((r) => {
+        modelLimits.set(id, r);
+        void extCtx?.globalState.update(`modelWindow:${id}`, r);
+      })
+      .finally(() => limitInFlight.delete(id));
+  }
+  return cached;
+}
+
+/** Map transcript context + model-limit cache into a render ContextView. */
+function buildContextView(
+  ctxInfo: ContextInfo,
+  contextEnabled: boolean,
+  credentialsPath: string,
+  nowSec: number
+): ContextView | undefined {
+  if (!contextEnabled) return undefined;
+  const usedTokens = ctxInfo.tokens;
+  if (!ctxInfo.modelId) {
+    // no model id yet (e.g. empty transcript) — show used only if we somehow
+    // have it, but with no way to resolve a limit it stays pending.
+    return { usedTokens, limitTokens: null, limitState: "pending" };
+  }
+  const cached = ensureModelLimit(ctxInfo.modelId, credentialsPath, nowSec);
+  if (!cached) return { usedTokens, limitTokens: null, limitState: "pending" };
+  if (cached.state === "ok" && cached.maxInputTokens) {
+    return { usedTokens, limitTokens: cached.maxInputTokens, limitState: "ok" };
+  }
+  return { usedTokens, limitTokens: null, limitState: "unavailable" };
 }
 
 function workspaceCwd(): string | null {
@@ -57,8 +106,9 @@ async function tick() {
     return;
   }
 
-  const { totals, mtimeMs } = readSessionTotals(cwd);
+  const { totals, mtimeMs, context } = readSessionTotals(cwd);
   const nowSec = Math.floor(Date.now() / 1000);
+  const contextView = buildContextView(context, conf.contextEnabled, conf.credentialsPath, nowSec);
 
   // quota: throttled + activity-gated; never blocks the UI tick
   let quotaView: QuotaView;
@@ -88,7 +138,7 @@ async function tick() {
       : { fiveH: null, sevenD: null, state: "error" };
   }
 
-  const view = buildView(totals, conf.weights, quotaView, nowSec, lang);
+  const view = buildView(totals, conf.weights, quotaView, nowSec, lang, contextView);
   item.text = view.text;
   const md = new vscode.MarkdownString(view.tooltip);
   // trusted so the tooltip's command links are clickable; only our own
@@ -105,7 +155,7 @@ async function tick() {
 
   // keep the (optional) persistent panel live
   if (panel) {
-    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang);
+    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang, contextView);
   }
 }
 
@@ -120,6 +170,17 @@ function rebuildItem() {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  extCtx = context;
+  // hydrate persisted model-window limits so a restart doesn't refetch.
+  try {
+    for (const k of context.globalState.keys()) {
+      if (!k.startsWith("modelWindow:")) continue;
+      const r = context.globalState.get<ModelWindowResult>(k);
+      if (r && typeof r.id === "string") modelLimits.set(r.id, r);
+    }
+  } catch {
+    /* globalState.keys() unavailable on very old VS Code — fine, refetch lazily */
+  }
   rebuildItem();
 
   context.subscriptions.push(

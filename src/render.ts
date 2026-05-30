@@ -13,13 +13,15 @@ import {
   PaceLevel,
   effectiveTokens,
   fmtTokens,
+  fmtMult,
   fmtRemaining,
   paceLevel,
+  contextLevel,
   worstLevel,
   WINDOW_5H_SECONDS,
   WINDOW_7D_SECONDS,
 } from "./metrics";
-import { Lang, messages } from "./i18n";
+import { Lang, Messages, messages } from "./i18n";
 
 export interface QuotaView {
   fiveH: QuotaWindow | null;
@@ -27,10 +29,48 @@ export interface QuotaView {
   state: "ok" | "no-credentials" | "error" | "rate-limited" | "disabled";
 }
 
+/** Context-window fill for the active (Lead) session. `usedTokens` = the real
+ *  input the model received last turn (MAIN transcript only); `limitTokens` =
+ *  the model's max_input_tokens from the Models API. Either may be null →
+ *  fail-visibly: with no limit the % is omitted, never guessed. */
+export interface ContextView {
+  usedTokens: number | null;
+  limitTokens: number | null;
+  // "pending" = limit not fetched yet (suppress the line to avoid a flicker of
+  // "(limit n/a)"); "unavailable" = a definitive failure → show used + "(n/a)".
+  limitState?: "ok" | "pending" | "unavailable";
+}
+
 export interface View {
   text: string;
   tooltip: string;
   level: PaceLevel;
+}
+
+/** Context % when both numbers are known, else null (fail-visibly). */
+function contextPct(ctx?: ContextView): number | null {
+  if (!ctx || ctx.usedTokens == null || ctx.limitTokens == null || ctx.limitTokens <= 0) return null;
+  return Math.round((ctx.usedTokens / ctx.limitTokens) * 100);
+}
+
+/** Collapsed-bar context segment: `ctx 47%`, dot-prefixed only when ≥85% so the
+ *  bar stays clean at normal fill. Null → omit (no limit, or no context yet). */
+function contextSegment(ctx: ContextView | undefined, m: Messages): string | null {
+  const pct = contextPct(ctx);
+  if (pct == null) return null;
+  const lvl = contextLevel(pct);
+  const prefix = lvl === "normal" ? "" : `${dot(lvl)} `;
+  return `${prefix}${m.ctxShort} ${pct}%`;
+}
+
+/** Context line for tooltip/panel: full `context: X% (used / limit)`, or
+ *  `context: used (limit n/a)` when the limit is unavailable, or null. */
+function contextLine(ctx: ContextView | undefined, m: Messages): string | null {
+  if (!ctx || ctx.usedTokens == null) return null;
+  const pct = contextPct(ctx);
+  if (pct != null) return m.contextLine(fmtTokens(ctx.usedTokens), fmtTokens(ctx.limitTokens!), pct);
+  if (ctx.limitState === "unavailable") return m.contextNoLimit(fmtTokens(ctx.usedTokens));
+  return null; // pending → show nothing yet
 }
 
 function bar(pct: number, width = 8): string {
@@ -47,15 +87,16 @@ export function buildView(
   weights: Weights,
   quota: QuotaView,
   nowSec: number,
-  lang: Lang = "en"
+  lang: Lang = "en",
+  context?: ContextView
 ): View {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
   // raw face-value cost if caching didn't exist: every token at 1× price.
   const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
-  const saved = Math.max(0, noCache - eff); // exactly the displayed difference
+  const mult = eff > 0 ? fmtMult(noCache / eff) : "1";
 
-  // ── collapsed bar: tariff-only, per-window dot + % + reset ──
+  // ── collapsed bar: tariff dots + (optional) context segment ──
   const segs: string[] = [];
   let level: PaceLevel = "normal";
 
@@ -71,18 +112,19 @@ export function buildView(
     windowSeg(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowSeg(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
   }
-  // fallback when tariff unavailable: show the analytical effective so the bar
-  // is never empty/useless.
-  const text = segs.length ? segs.join(" · ") : `$(pulse) ${m.effShort} ${fmtTokens(eff)}`;
 
-  // ── rich tooltip (analytical) ──
+  // Context is a FIXED-fill signal — it colours its OWN segment but does NOT
+  // drive the item background (that stays tariff-pace, two different models).
+  const ctxSeg = contextSegment(context, m);
+  // fallback when tariff unavailable: show effective so the bar is never empty.
+  const tariffText = segs.length ? segs.join(" · ") : `$(pulse) ${m.effShort} ${fmtTokens(eff)}`;
+  const text = ctxSeg ? `${tariffText} · ${ctxSeg}` : tariffText;
+
+  // ── rich tooltip: cost-first headline, then tariff + context, then details ──
   const t: string[] = [];
   t.push(m.title);
   t.push("");
-  t.push(m.workLine(fmtTokens(totals.work), fmtTokens(totals.input), fmtTokens(totals.output)));
-  t.push(m.cacheRaw(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)));
-  t.push(m.noCacheLine(fmtTokens(noCache)));
-  t.push(m.withCacheLine(fmtTokens(eff), fmtTokens(saved)));
+  t.push(m.costCompact(fmtTokens(eff), fmtTokens(noCache), mult));
   t.push("");
 
   const quotaLine = (label: string, w: QuotaWindow | null, windowSec: number): string => {
@@ -100,6 +142,11 @@ export function buildView(
     t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
     t.push(m.localAlwaysAccurate);
   }
+  const cl = contextLine(context, m);
+  if (cl) t.push(`- ${cl}`);
+  t.push("");
+  // muted technical breakdown
+  t.push(`_${m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite))}_`);
   t.push("");
   t.push(m.legend);
   t.push("");
@@ -120,20 +167,20 @@ export function buildPanelHtml(
   weights: Weights,
   quota: QuotaView,
   nowSec: number,
-  lang: Lang = "en"
+  lang: Lang = "en",
+  context?: ContextView
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
   const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
   const saved = Math.max(0, noCache - eff);
+  const mult = eff > 0 ? fmtMult(noCache / eff) : "1";
 
+  // headline: cost comparison + savings multiplier (lead with the answer)
   const rows: string[] = [];
-  rows.push(`<div class="row"><span>${esc(m.panelWork)}</span><b>${fmtTokens(totals.work)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="sub">${esc(m.panelInOut(fmtTokens(totals.input), fmtTokens(totals.output)))}</div>`);
-  rows.push(`<div class="row"><span>${esc(m.panelCacheLabel)}</span><b>${esc(m.panelCacheValue(fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)))}</b></div>`);
-  rows.push(`<div class="row"><span>${esc(m.panelNoCache)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="row big"><span>${esc(m.panelWithCache)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="sub">${esc(m.panelSaved(fmtTokens(saved)))}</div>`);
+  rows.push(`<div class="row big"><span>${esc(m.panelCostLabel)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="row"><span>${esc(m.panelNoCacheLabel)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
+  rows.push(`<div class="row save"><span>${esc(m.panelSavedLabel)}</span><b>≈ ${fmtTokens(saved)} ${esc(m.tok)} <span class="mult">${esc(m.cheaperMult(mult))}</span></b></div>`);
 
   const quotaBlock: string[] = [];
   const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
@@ -156,16 +203,26 @@ export function buildPanelHtml(
     );
   };
 
+  // context-window fill — its own line right under the tariff (see spec).
+  const cl = contextLine(context, m);
+  const ctxRow = cl ? `<div class="ctxrow">${esc(cl)}</div>` : "";
+
   let quotaSection: string;
   if (quota.state === "ok") {
     windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
-    quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}`;
+    quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}${ctxRow}`;
   } else {
     quotaSection =
       `<p class="muted">${esc(m.quotaStateMsg[quota.state])}</p>` +
-      `<p class="muted">${esc(m.panelLocalAccurate)}</p>`;
+      `<p class="muted">${esc(m.panelLocalAccurate)}</p>` +
+      ctxRow;
   }
+
+  // muted technical breakdown
+  const detailsSection =
+    `<h3>${esc(m.panelDetailsHeader)}</h3>` +
+    `<div class="sub">${esc(m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)))}</div>`;
 
   return `<!DOCTYPE html>
 <html lang="${lang}">
@@ -179,9 +236,12 @@ export function buildPanelHtml(
   h2 { font-size: 15px; margin: 0 0 12px; }
   h3 { font-size: 13px; margin: 18px 0 8px; opacity: .85; }
   .row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; }
-  .row.big b { font-size: 15px; }
+  .row.big b { font-size: 16px; }
+  .row.save b { color: var(--cc-green); }
+  .row.save .mult { opacity:.8; font-weight:normal; font-size:12px; }
   .row span { opacity:.9; } .row b { font-variant-numeric: tabular-nums; }
   .sub { opacity:.6; font-size:12px; padding:1px 0 6px; }
+  .ctxrow { padding:6px 0 2px; opacity:.85; font-variant-numeric: tabular-nums; }
   .qrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
   .dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
   .qlabel { width:28px; opacity:.85; }
@@ -197,6 +257,7 @@ export function buildPanelHtml(
   <h2>${esc(m.panelTitle)}</h2>
   ${rows.join("\n  ")}
   ${quotaSection}
+  ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
 </body>
 </html>`;

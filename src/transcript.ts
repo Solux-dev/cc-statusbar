@@ -5,7 +5,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { Totals, sumTranscript, addTotals, emptyTotals } from "./metrics";
+import { Totals, ContextInfo, sumTranscript, addTotals, emptyTotals, lastAssistantContext } from "./metrics";
 
 /** Claude Code's project slug: cwd with : \ / _ all replaced by '-'.
  *  Matches session-cost.py get_project_slug(). */
@@ -49,12 +49,23 @@ function readFileSafe(p: string): string {
   }
 }
 
-/** Sum the active session: main transcript + its subagents/agent-*.jsonl. */
-export function readSessionTotals(cwd: string): { totals: Totals; transcript: string | null; mtimeMs: number } {
+/** Sum the active session: main transcript + its subagents/agent-*.jsonl.
+ *  COST (`totals`) sums main + subagents. CONTEXT (`context`) is the MAIN
+ *  transcript's last turn ONLY — subagents have separate windows (see spec). */
+export function readSessionTotals(cwd: string): {
+  totals: Totals;
+  transcript: string | null;
+  mtimeMs: number;
+  context: ContextInfo;
+} {
   const main = findActiveTranscript(cwd);
-  if (!main) return { totals: emptyTotals(), transcript: null, mtimeMs: 0 };
+  if (!main) {
+    return { totals: emptyTotals(), transcript: null, mtimeMs: 0, context: { tokens: null, modelId: null } };
+  }
 
-  let totals = sumTranscript(readFileSafe(main));
+  const mainRaw = readFileSafe(main);
+  let totals = sumTranscript(mainRaw);
+  const context = lastAssistantContext(mainRaw); // MAIN only — do NOT include subagents
   let mtimeMs = 0;
   try {
     mtimeMs = fs.statSync(main).mtimeMs;
@@ -74,5 +85,5 @@ export function readSessionTotals(cwd: string): { totals: Totals; transcript: st
     /* no subagents dir — fine */
   }
 
-  return { totals, transcript: main, mtimeMs };
+  return { totals, transcript: main, mtimeMs, context };
 }

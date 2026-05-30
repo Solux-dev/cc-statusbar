@@ -28,7 +28,17 @@ export interface QuotaResult {
 
 const CRED_BETA = "oauth-2025-04-20";
 const API_URL = "https://api.anthropic.com/v1/messages";
+const MODELS_URL = "https://api.anthropic.com/v1/models";
 const QUOTA_MODEL = "claude-haiku-4-5-20251001";
+
+export interface ModelWindowResult {
+  id: string;
+  /** max_input_tokens = the context-window limit; null on any failure (fail-visibly). */
+  maxInputTokens: number | null;
+  fetchedAtSec: number;
+  state: "ok" | "no-credentials" | "error";
+  detail?: string;
+}
 
 function credentialsPath(override: string): string {
   if (override && override.trim()) return override.trim();
@@ -92,6 +102,50 @@ export async function fetchQuota(override: string, nowSec: number): Promise<Quot
     return { fiveH, sevenD, fetchedAtSec: nowSec, state: "ok" };
   } catch (e: any) {
     return { fiveH: null, sevenD: null, fetchedAtSec: nowSec, state: "error", detail: String(e?.message || e) };
+  }
+}
+
+/** Fetch a model's context-window limit (max_input_tokens) via GET /v1/models/{id}
+ *  using the SAME local OAuth token as the quota feature. Verified 2026-05-31:
+ *  the subscription OAuth token returns 200 with max_input_tokens on this route.
+ *  Never throws — returns a state-tagged result. On ANY failure maxInputTokens
+ *  stays null → callers fail visibly (hide the %), never guess. Model window
+ *  limits don't change, so the caller caches the result for a long time (24h). */
+export async function fetchModelWindow(
+  id: string,
+  override: string,
+  nowSec: number
+): Promise<ModelWindowResult> {
+  const token = readAccessToken(override);
+  if (!token) {
+    return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "no-credentials" };
+  }
+  try {
+    const resp = await fetch(`${MODELS_URL}/${encodeURIComponent(id)}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": CRED_BETA,
+      },
+    });
+    const text = await resp.text();
+    if (!resp.ok) {
+      return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: `http ${resp.status}` };
+    }
+    let obj: any;
+    try {
+      obj = JSON.parse(text);
+    } catch {
+      return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: "bad json" };
+    }
+    const lim = obj?.max_input_tokens;
+    if (typeof lim !== "number" || !Number.isFinite(lim) || lim <= 0) {
+      return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: "no max_input_tokens" };
+    }
+    return { id, maxInputTokens: lim, fetchedAtSec: nowSec, state: "ok" };
+  } catch (e: any) {
+    return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: String(e?.message || e) };
   }
 }
 

@@ -13,3 +13,4 @@ package-lock.json
 media/make_icon.py
 media/icon-256.png
 media/screenshot-*.png
+docs/**

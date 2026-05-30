@@ -24,6 +24,15 @@ export interface QuotaWindow {
 
 export type PaceLevel = "normal" | "tight" | "over";
 
+/** Current fill of the model's context window — read from the MAIN transcript's
+ *  last assistant turn. `tokens` is the real input the model received
+ *  (input + cache_read + cache_creation); `modelId` drives the window-limit
+ *  lookup. Both null when no assistant turn with usage is present yet. */
+export interface ContextInfo {
+  tokens: number | null;
+  modelId: string | null;
+}
+
 export function emptyTotals(): Totals {
   return { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
 }
@@ -57,6 +66,43 @@ export function sumTranscript(raw: string): Totals {
   return t;
 }
 
+/** Context-window fill from ONE transcript (the MAIN one). The LAST assistant
+ *  message that carries a usage block wins — that is the most recent real prompt
+ *  the model received. Subagents have their OWN windows and must NOT be summed
+ *  here (unlike the cost metric). Returns the model id from that same turn so
+ *  the caller can look up the window limit. */
+export function lastAssistantContext(raw: string): ContextInfo {
+  let tokens: number | null = null;
+  let modelId: string | null = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      continue; // tolerate a partial last line mid-write
+    }
+    if (obj?.type !== "assistant" || !obj.message) continue;
+    const u = obj.message.usage;
+    if (!u) continue;
+    // latest assistant turn with usage overwrites → ends as the last one.
+    tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    if (typeof obj.message.model === "string" && obj.message.model) modelId = obj.message.model;
+  }
+  return { tokens, modelId };
+}
+
+/** Context fill colour level — a FIXED threshold, deliberately NOT paceLevel.
+ *  Context has no reset and no time, so a pace/time projection is meaningless:
+ *  only "how full" matters. Reuses the pace COLOUR palette (normal/tight/over)
+ *  via thresholds ≥85% → tight, ≥95% → over. (Spec 0.4.0.) */
+export function contextLevel(pct: number): PaceLevel {
+  if (pct >= 95) return "over";
+  if (pct >= 85) return "tight";
+  return "normal";
+}
+
 export function addTotals(a: Totals, b: Totals): Totals {
   return {
     input: a.input + b.input,
@@ -68,9 +114,20 @@ export function addTotals(a: Totals, b: Totals): Totals {
 }
 
 export function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  // one decimal, but drop a trailing ".0" → "1M" not "1.0M", "468k" not "468.0k".
+  const f = (v: number, suf: string): string => {
+    const s = v.toFixed(1);
+    return (s.endsWith(".0") ? s.slice(0, -2) : s) + suf;
+  };
+  if (n >= 1_000_000) return f(n / 1_000_000, "M");
+  if (n >= 1_000) return f(n / 1_000, "k");
   return String(Math.round(n));
+}
+
+/** Savings multiplier (noCache / effective) → "6.8", "7" (drops trailing ".0"). */
+export function fmtMult(x: number): string {
+  const s = x.toFixed(1);
+  return s.endsWith(".0") ? s.slice(0, -2) : s;
 }
 
 /** Time-until-reset with language-specific unit suffixes.

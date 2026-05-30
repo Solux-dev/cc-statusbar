@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude Code Cost Statusbar",
   "description": "Live Claude Code token consumption (work / effective / cache), tokens-per-active-hour and real 5h/7d subscription quota in the VS Code status bar. Reads local transcripts; optionally fetches real rate limits.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -108,6 +108,11 @@
           "type": "string",
           "default": "",
           "description": "Override path to Claude credentials JSON (default: ~/.claude/.credentials.json)."
+        },
+        "ccStatusbar.context.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show how full the model's context window is right now (current input ÷ the model's max_input_tokens). The window limit is fetched once per model from the Anthropic Models API using the same local token as the quota feature and cached 24h; if it can't be fetched the % is hidden (never guessed). Turn off to skip this lookup entirely."
         }
       }
     }

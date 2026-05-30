@@ -124,6 +124,7 @@ Reload VS Code. The item appears on the right of the status bar.
 | `quota.enabled` | `true` | Fetch real 5h/7d quota (costs ~tokens) |
 | `quota.minPollSeconds` | `300` | Min seconds between quota calls |
 | `credentialsPath` | `""` | Override credentials file location |
+| `context.enabled` | `true` | Show how full the model's context window is now (Models API, cached 24h) |
 
 ## Reliability — what can temporarily break (important)
 
@@ -137,6 +138,11 @@ The plugin has two parts with different reliability:
   break: all local metrics keep working and the tariff is simply hidden with a
   "temporarily unavailable" note. Because only `src/quota.ts` touches that
   channel, a fix is a small, isolated patch.
+- **The context-window %** depends on the same external channel: it reads the
+  model's window limit from the Anthropic Models API using your local OAuth
+  token (cached 24h). If that channel changes, **only the context line hides**
+  (the % is never guessed) — local cost/cache metrics are unaffected. The fix is
+  likewise isolated to `src/quota.ts`.
 
 **What the user does:** nothing. When the channel changes, a fix is released and
 — if installed from the Marketplace — **arrives as an automatic update**.

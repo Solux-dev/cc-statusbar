@@ -3,6 +3,31 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] — 2026-05-31
+
+### Added
+
+- **Context-window usage %.** Shows how full the model's context window is right
+  now — current input ÷ the model's `max_input_tokens` — so you can tell how big
+  a next task can be. This is different from the cost metric (which only grows).
+  Appears in the collapsed status bar (`· ctx 47%` / `· конт 47%`, after the
+  tariff segments) and as a full `context: 47% (468k / 1M)` line in the tooltip
+  and panel. Coloured by fill (≥85% yellow, ≥95% red) — a **fixed threshold**,
+  deliberately not the time-based tariff pace.
+- The window limit is read once per model from the Anthropic **Models API**
+  (`max_input_tokens`), using the same local OAuth token as the quota feature,
+  cached 24h. **No hardcoded model→window table** — if the limit can't be
+  fetched the % is hidden (never guessed), and a fix is an isolated update.
+- Setting `ccStatusbar.context.enabled` (default `true`) to turn the lookup off.
+
+### Changed
+
+- **Panel/tooltip lead with the cost answer.** The breakdown now opens with
+  *cost (with cache) · without cache · ~N× cheaper* and demotes the raw
+  work/cache numbers to a muted **Details** block — so the value of caching is
+  obvious without mental math.
+- Token figures drop a trailing `.0` (`1M` not `1.0M`, `468k` not `468.0k`).
+
 ## [0.3.1] — 2026-05-31
 
 ### Changed

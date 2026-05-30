@@ -4,8 +4,11 @@ import {
   effectiveTokens,
   sumTranscript,
   fmtTokens,
+  fmtMult,
   fmtRemaining,
   paceLevel,
+  contextLevel,
+  lastAssistantContext,
   parseRateLimitHeaders,
   WINDOW_5H_SECONDS,
 } from "../metrics";
@@ -45,6 +48,45 @@ test("fmtTokens", () => {
   assert.equal(fmtTokens(500), "500");
   assert.equal(fmtTokens(1500), "1.5k");
   assert.equal(fmtTokens(2_450_000), "2.5M");
+  // drop trailing ".0" → "1M" not "1.0M", "468k" not "468.0k"
+  assert.equal(fmtTokens(1_000_000), "1M");
+  assert.equal(fmtTokens(468_000), "468k");
+  assert.equal(fmtTokens(10_000_000), "10M");
+});
+
+test("fmtMult: one decimal, drops trailing .0", () => {
+  assert.equal(fmtMult(11_200_000 / 2_450_000), "4.6");
+  assert.equal(fmtMult(7), "7");
+  assert.equal(fmtMult(6.84), "6.8");
+});
+
+test("contextLevel: fixed-fill thresholds (NOT pace)", () => {
+  assert.equal(contextLevel(0), "normal");
+  assert.equal(contextLevel(47), "normal");
+  assert.equal(contextLevel(84), "normal");
+  assert.equal(contextLevel(85), "tight");
+  assert.equal(contextLevel(94), "tight");
+  assert.equal(contextLevel(95), "over");
+  assert.equal(contextLevel(100), "over");
+});
+
+test("lastAssistantContext: last assistant turn wins, main-only numerator + model id", () => {
+  const raw = [
+    JSON.stringify({ type: "assistant", message: { model: "claude-opus-4-8", usage: { input_tokens: 100, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 } } }),
+    JSON.stringify({ type: "user", message: { content: "hi" } }),
+    "{ broken",
+    JSON.stringify({ type: "assistant", message: { model: "claude-opus-4-8", usage: { input_tokens: 200, cache_read_input_tokens: 468000, cache_creation_input_tokens: 0 } } }),
+  ].join("\n");
+  const c = lastAssistantContext(raw);
+  // last turn: 200 + 468000 + 0
+  assert.equal(c.tokens, 468200);
+  assert.equal(c.modelId, "claude-opus-4-8");
+});
+
+test("lastAssistantContext: empty / no usage → nulls", () => {
+  assert.deepEqual(lastAssistantContext(""), { tokens: null, modelId: null });
+  const onlyUser = JSON.stringify({ type: "user", message: { content: "x" } });
+  assert.deepEqual(lastAssistantContext(onlyUser), { tokens: null, modelId: null });
 });
 
 test("fmtRemaining: english units", () => {
@@ -116,9 +158,10 @@ test("buildView (ru): ok state shows tariff-only bar (dots + 5ч/7д), эфф in
   assert.match(v.text, /🟢 5ч 24%/);
   assert.match(v.text, /7д 41%/);
   assert.ok(!/эфф/.test(v.text), "effective must NOT be in collapsed bar");
-  // analytical numbers live in the tooltip, decomposition sums to effective
-  assert.match(v.tooltip, /с кэшем \(эффективно\) ≈ \*\*2\.5M\*\*/);
-  assert.match(v.tooltip, /без кэша было бы ≈ \*\*11\.2M\*\*/);
+  // cost-first headline: with-cache · without-cache · ×cheaper (4.6×)
+  assert.match(v.tooltip, /с кэшем ≈ \*\*2\.5M\*\* · без кэша ≈ \*\*11\.2M\*\* \(дешевле в ~4\.6×\)/);
+  // muted technical breakdown line still present
+  assert.match(v.tooltip, /работа \(ввод\+вывод\) 200k · кэш: чтение 10M \/ запись 1M/);
 });
 
 test("buildView (en): ok state, english bar + tooltip", () => {
@@ -131,8 +174,8 @@ test("buildView (en): ok state, english bar + tooltip", () => {
   }, now, "en");
   assert.match(v.text, /🟢 5h 24%/);
   assert.match(v.text, /7d 41%/);
-  assert.match(v.tooltip, /with caching \(effective\) ≈ \*\*2\.5M\*\*/);
-  assert.match(v.tooltip, /without caching ≈ \*\*11\.2M\*\*/);
+  assert.match(v.tooltip, /with cache ≈ \*\*2\.5M\*\* · without cache ≈ \*\*11\.2M\*\* \(~4\.6× cheaper\)/);
+  assert.match(v.tooltip, /work \(in\+out\) 200k · cache: read 10M \/ write 1M/);
   assert.match(v.tooltip, /Subscription quota/);
   assert.match(v.tooltip, /on track/);
 });
@@ -182,14 +225,19 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 }, sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 } };
   const en = buildPanelHtml(totals, W, q, now, "en");
   assert.match(en, /^<!DOCTYPE html>/);
+  assert.match(en, /This session cost/);
   assert.match(en, /Without caching/);
-  assert.match(en, /With caching \(effective\)/);
+  assert.match(en, /Cache saved/);
+  assert.match(en, /~4\.6× cheaper/);
   assert.match(en, /2\.5M/);
   assert.match(en, /11\.2M/);
   assert.match(en, /Subscription quota/);
+  assert.match(en, /Details/);
   const ru = buildPanelHtml(totals, W, q, now, "ru");
+  assert.match(ru, /Стоило \(с учётом кэша\)/);
   assert.match(ru, /Без кэша было бы/);
-  assert.match(ru, /С кэшем \(эффективно\)/);
+  assert.match(ru, /Экономия за счёт кэша/);
+  assert.match(ru, /в ~4\.6× дешевле/);
   assert.match(ru, /Тариф/);
 });
 
@@ -198,6 +246,89 @@ test("buildPanelHtml: escapes nothing dangerous + handles disabled quota", () =>
   const html = buildPanelHtml(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
   assert.ok(!/<script/i.test(html), "no script tags");
   assert.match(html, /polling is off/);
+});
+
+const ctxTotals = { input: 50000, output: 150000, work: 200000, cacheRead: 10_000_000, cacheWrite: 1_000_000 };
+
+test("buildView: context segment in collapsed bar + line in tooltip (en)", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 468_000,
+    limitTokens: 1_000_000,
+    limitState: "ok",
+  });
+  // 468k / 1M = 47% → normal fill → no dot, appended after the eff fallback
+  assert.match(v.text, /· ctx 47%$/);
+  assert.ok(!/🟡|🔴/.test(v.text), "normal fill has no warning dot");
+  assert.match(v.tooltip, /- context: 47% \(468k \/ 1M\)/);
+});
+
+test("buildView: context segment in collapsed bar (ru) appended after tariff", () => {
+  const now = 1000;
+  const v = buildView(ctxTotals, W, {
+    state: "ok",
+    fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 },
+    sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 },
+  }, now, "ru", { usedTokens: 468_000, limitTokens: 1_000_000, limitState: "ok" });
+  assert.match(v.text, /🟢 5ч 24%/);
+  assert.match(v.text, /· конт 47%$/);
+  assert.match(v.tooltip, /контекст: 47% \(468k \/ 1M\)/);
+});
+
+test("buildView: context ≥85% gets a warning dot but does NOT change item level", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 900_000,
+    limitTokens: 1_000_000,
+    limitState: "ok",
+  });
+  assert.match(v.text, /🟡 ctx 90%/);
+  // item background stays tariff-pace; context fill must NOT drive it
+  assert.equal(v.level, "normal");
+});
+
+test("buildView: context ≥95% → red dot in segment", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 970_000,
+    limitTokens: 1_000_000,
+    limitState: "ok",
+  });
+  assert.match(v.text, /🔴 ctx 97%/);
+  assert.equal(v.level, "normal");
+});
+
+test("buildView: limit unavailable → used shown in tooltip, NO % in bar (fail-visibly)", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 468_000,
+    limitTokens: null,
+    limitState: "unavailable",
+  });
+  assert.ok(!/ctx/.test(v.text), "no context % in the collapsed bar without a limit");
+  assert.match(v.tooltip, /context: 468k \(limit n\/a\)/);
+});
+
+test("buildView: limit pending → context hidden everywhere (no flicker)", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 468_000,
+    limitTokens: null,
+    limitState: "pending",
+  });
+  assert.ok(!/ctx/.test(v.text));
+  assert.ok(!/context:/.test(v.tooltip), "pending limit shows nothing yet");
+});
+
+test("buildView: no context arg → no context anywhere (backward compatible)", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
+  assert.ok(!/ctx/.test(v.text));
+  assert.ok(!/context:/.test(v.tooltip));
+});
+
+test("buildPanelHtml: context line rendered when limit known (both langs)", () => {
+  const now = 1000;
+  const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 }, sevenD: null };
+  const ctx = { usedTokens: 468_000, limitTokens: 1_000_000, limitState: "ok" as const };
+  const en = buildPanelHtml(ctxTotals, W, q, now, "en", ctx);
+  assert.match(en, /context: 47% \(468k \/ 1M\)/);
+  const ru = buildPanelHtml(ctxTotals, W, q, now, "ru", ctx);
+  assert.match(ru, /контекст: 47% \(468k \/ 1M\)/);
 });
 
 test("buildView: over pace yields over level (item color)", () => {
