@@ -1,14 +1,16 @@
-# Claude Code Cost Statusbar
+# Claude Code Usage — Quota & Context Statusbar
 
 [![Marketplace](https://img.shields.io/visual-studio-marketplace/v/solux-dev.cc-statusbar?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
 
-A VS Code status-bar item showing your **real 5-hour / 7-day Claude Code
-subscription quota** and **how full the model's context window is right now** —
-plus **live token consumption** for the active session. Built for subscription
-users who want an at-a-glance cockpit without leaving the editor.
+A VS Code status-bar item showing the two things a Claude Code subscriber can't
+conveniently see anywhere else: your **real 5-hour / 7-day subscription quota**
+and **how full the model's context window is right now** — colour-coded, at a
+glance, without leaving the editor. The hover panel adds an **auto-detected
+prompt-cache tier (1h / 5m)** and session cache stats, plus a cache-weighted cost
+breakdown.
 
-**Install:** search **“Claude Code Cost Statusbar”** in the VS Code Extensions
-view, or run `code --install-extension solux-dev.cc-statusbar`.
+**Install:** search **“Claude Code Usage”** in the VS Code Extensions view, or
+run `code --install-extension solux-dev.cc-statusbar`.
 
 | English | Русский |
 |---------|---------|
@@ -25,14 +27,16 @@ Compact status-bar line (click to refresh) — when the real quota is available
 it shows the **tariff** per window, then the **context-window fill**:
 
 ```text
-🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · ctx 47%
+🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
 ```
 
 `ctx 47%` is how full the model's context window is right now (current input ÷
-the model's window limit). It gets its own warning dot at ≥85% (yellow) and
-≥95% (red), but — unlike the tariff — it does **not** recolour the whole item,
-because "how full" and "burn pace" are two different things. If the window limit
-can't be fetched, the `ctx` segment is simply hidden (the % is never guessed).
+the model's window limit) — a quick read of how big a next step you can take. Its
+dot is **purely informational** (🟢 under 50% · 🟡 50–80% · 🔴 80%+) and,
+unlike the tariff, it **never** recolours the whole item: context is just
+information, not a quota with consequences, so "how full" and "burn pace" stay
+visually separate. If the window limit can't be fetched, the `ctx` segment is
+simply hidden (the % is never guessed).
 
 When the quota channel is off/unavailable it falls back to the always-accurate
 local number: `$(pulse) eff 4.7M`.
@@ -53,11 +57,35 @@ Hover for the full breakdown (tooltip):
   `context: 47% (468k / 1M)`. Read once per model from the Anthropic Models API
   (`max_input_tokens`, cached 24h); hidden entirely if the limit can't be
   fetched (never guessed).
+- **cache** — the prompt-cache tier this session is on, auto-detected from the
+  transcript, e.g. `🗄 Cache: 1-hour tier — survives ~1h idle`.
 
 The "with cache" figure is cache-weighted (cheap reads, costly writes:
 `work + 0.1·cache_read + 1.25·cache_write`), so it stays comparable across
 sessions. When the tariff line is unavailable, this same number is the bar's
 `eff` fallback.
+
+## Cache insight (panel)
+
+Open the panel (**“⤢ Open panel”**) for a small **Cache** section — two plain
+lines, each with a hover footnote (ⓘ) that explains it in full, so you never have
+to look anything up:
+
+- **Tier — `1-hour` / `5-minute`.** Auto-detected from the session, never
+  assumed. It tells you how long your prompt cache stays warm while you're idle:
+  on a subscription within its plan limit it's **1-hour** (stepping away for up
+  to an hour stays cheap); an API key, paid usage past your plan limit, or
+  subagents run at **5-minute** (short breaks rebuild the cache and cost more).
+  Check it once to know how long a break you can take — you don't need to watch
+  it.
+- **Input from cache — e.g. `95%`.** The share of your prompt served from cache
+  (cheap) instead of re-read fresh; higher means the cache is being reused well.
+  It's normal to start low and climb as a session warms up — a *descriptive* read
+  of where this session's tokens went, **not a score**.
+
+These are read straight from the per-turn `cache_creation.ephemeral_{1h,5m}`
+fields in the local transcript, so they stay correct even as Anthropic adjusts
+caching behaviour.
 
 ## Glossary — what you see / Что вы видите
 
@@ -71,7 +99,9 @@ sessions. When the tariff line is unavailable, this same number is the bar's
 | `without cache` / без кэша | what it would have cost with no caching — the contrast shows the saving | сколько стоило бы без кэша — контраст показывает экономию |
 | `work` / работа | raw input + output tokens (shown under Details) | сырые токены ввода + вывода (в блоке «Детали») |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
-| `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше |
+| `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be; its dot is informational (🟢<50% · 🟡50–80% · 🔴80%+) and never tints the whole bar | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше; кружок информационный (🟢<50% · 🟡50–80% · 🔴80%+) и не красит весь бар |
+| cache tier / тир кэша | how long your prompt cache stays warm while idle — `1-hour` (subscription within plan) or `5-minute` (API key / over plan / subagents), read from the session | сколько кэш живёт при простое — `часовой` (подписка в пределах плана) или `5-минутный` (API-ключ / сверх плана / субагенты), определяется из сессии |
+| input from cache / ввод из кэша | share of the prompt served from cache (cheap) vs re-read fresh — higher = better reuse; descriptive, not a score | доля промпта из кэша (дёшево) против повторного чтения — выше = лучше переиспользование; описание, не оценка |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
 
 ### Language / Язык
@@ -110,7 +140,7 @@ small and MIT-licensed — read `src/quota.ts` to verify.
 
 ## Install
 
-**From the Marketplace (recommended):** search **“Claude Code Cost Statusbar”**
+**From the Marketplace (recommended):** search **“Claude Code Usage”**
 in the Extensions view, or run `code --install-extension solux-dev.cc-statusbar`.
 Updates arrive automatically.
 
@@ -120,7 +150,7 @@ Updates arrive automatically.
 npm install
 npm run compile
 npm run package        # produces cc-statusbar-<version>.vsix
-code --install-extension cc-statusbar-0.4.0.vsix
+code --install-extension cc-statusbar-1.0.0.vsix
 ```
 
 Reload VS Code. The item appears on the right of the status bar.

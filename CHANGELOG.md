@@ -3,6 +3,42 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.0] — 2026-05-31
+
+First stable release. The extension now sells exactly what a Claude Code
+subscriber can't get conveniently elsewhere — **5h / 7d quota** and **context
+window %** — with cache as a quiet, honest extra.
+
+### Added
+
+- **Cache insight (panel + tooltip).** The session's prompt-cache **tier
+  (`1-hour` / `5-minute`) is auto-detected** from the transcript's per-turn
+  `cache_creation.ephemeral_{1h,5m}` fields — read from the data, never a
+  hardcoded TTL assumption, so it stays correct as Anthropic adjusts caching.
+  A concise self-explanatory line shows in the hover tooltip; the panel adds a
+  **Cache** section with the tier and a descriptive **input-from-cache %**, each
+  with a hover footnote (ⓘ) explaining what it means and how to use it.
+
+### Changed
+
+- **Renamed** to *“Claude Code Usage — Quota & Context Statusbar”* with a
+  quota/context-first description (the install URL `solux-dev.cc-statusbar` is
+  unchanged). “Cost” is demoted to a quiet extra — for a subscriber, cost means
+  quota consumption, not token accounting.
+- **Context dot is now purely informational** — 🟢 under 50% · 🟡 50–80% ·
+  🔴 80%+, always shown, and it **never** recolours the whole status-bar item
+  (the whole-item fill stays reserved for the quota pace). Context is a "room for
+  the next step" read, not a quota with consequences.
+
+### Fixed
+
+- **Robust cache-token parsing.** Falls back to the nested
+  `cache_creation.ephemeral_{5m,1h}` breakdown when the top-level
+  `cache_creation_input_tokens` reports 0 (a Claude Code <v2.1.152 quirk).
+- **Subagent turns (`isSidechain`) are excluded** from the main session's
+  context and cache stats — they have their own window and 5-minute tier and
+  would otherwise confound the numbers.
+
 ## [0.4.0] — 2026-05-31
 
 ### Added

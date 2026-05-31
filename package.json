@@ -1,8 +1,8 @@
 {
   "name": "cc-statusbar",
-  "displayName": "Claude Code Cost Statusbar",
-  "description": "Live Claude Code token consumption (work / effective / cache), tokens-per-active-hour and real 5h/7d subscription quota in the VS Code status bar. Reads local transcripts; optionally fetches real rate limits.",
-  "version": "0.4.0",
+  "displayName": "Claude Code Usage — Quota & Context Statusbar",
+  "description": "See your real 5h / 7d Claude Code subscription quota and how full the model's context window is — right in the VS Code status bar. Plus an auto-detected prompt-cache tier (1h/5m) and session cache stats. Reads local transcripts; fetches real rate limits with your existing token.",
+  "version": "1.0.0",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -16,9 +16,12 @@
     "claude",
     "claude-code",
     "anthropic",
+    "quota",
+    "rate-limit",
+    "context-window",
     "tokens",
     "usage",
-    "cost",
+    "cache",
     "statusbar"
   ],
   "repository": {
@@ -53,7 +56,7 @@
       }
     ],
     "configuration": {
-      "title": "Claude Code Cost Statusbar",
+      "title": "Claude Code Usage — Quota & Context Statusbar",
       "properties": {
         "ccStatusbar.language": {
           "type": "string",
