@@ -195,6 +195,21 @@ This is a **best-effort** tool, distributed under the MIT license "as is",
 without warranty. Tariff problems are usually **not the plugin's fault** but a
 change on Anthropic's side, and are resolved by an update.
 
+## Known behaviour (not bugs)
+
+- **Works in VS Code forks** (Cursor, Windsurf, VSCodium, …) — it uses only core
+  VS Code APIs and reads Claude Code's local files, which are editor-independent.
+- **Same folder open in two editors at once:** Claude Code stores transcripts
+  **per folder, not per editor**, and the plugin shows the *most recently active*
+  session for the open folder. So if you have the same folder open in, say, VS
+  Code and Cursor, both windows show whichever session you typed in last — the
+  context % can appear to "jump" between them. In normal use (one editor per
+  folder) this never happens.
+- **Context limit "n/a" right after install:** the context-window limit is
+  fetched once from the Models API; until that first lookup succeeds the `ctx`
+  line may briefly read `(limit n/a)`. It resolves itself on the next successful
+  lookup — no action needed.
+
 ## License
 
 MIT.
