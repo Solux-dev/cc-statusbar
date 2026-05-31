@@ -14,7 +14,7 @@ run `code --install-extension solux-dev.cc-statusbar`.
 
 | English | Русский |
 |---------|---------|
-| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png) |
+| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png?v=2) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png?v=2) |
 
 The collapsed bar lives at the bottom-right of the status bar; hover it for the
 full breakdown shown above. Want to keep it open? Click **“⤢ Open panel”** in

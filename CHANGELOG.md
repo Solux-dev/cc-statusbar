@@ -3,6 +3,20 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.2] — 2026-06-01
+
+Docs/release-plumbing only — no extension code changes.
+
+### Changed
+
+- **Refreshed the README screenshots** to the current v1.0.x UI (cache-tier line,
+  informational context dot, quota + context). Cache-busted the image URLs so
+  GitHub's image proxy serves the new ones.
+- First release published through the **automated pipeline** (tag push → tests →
+  Open VSX + GitHub Release).
+- Added a `.mailmap` so all authorship shows under the single `Solux-dev`
+  identity.
+
 ## [1.0.1] — 2026-05-31
 
 ### Fixed

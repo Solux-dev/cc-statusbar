@@ -1,0 +1,5 @@
+# Coalesce all authorship under the single canonical identity Solux-dev.
+# GitHub's Contributors graph and `git shortlog -sne` honor .mailmap.
+# Format: Canonical Name <canonical-email> <commit-email-to-map>
+Solux-dev <289205829+Solux-dev@users.noreply.github.com> <tuantieptheo21121@gmail.com>
+Solux-dev <289205829+Solux-dev@users.noreply.github.com> <noreply@anthropic.com>
