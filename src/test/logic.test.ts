@@ -370,8 +370,10 @@ test("buildPanelHtml: cache section — tier + hit rate + hover footnotes; hidde
   assert.match(html, /1-hour/);
   assert.match(html, /Input from cache/);
   assert.match(html, /<b>82%<\/b>/);
-  assert.match(html, /title="[^"]*prompt cache stays warm/, "tier footnote present");
-  assert.match(html, /title="[^"]*served from cache/, "hit-rate footnote present");
+  // themed CSS tooltip (not native title=, which ignores dark mode)
+  assert.match(html, /class="tip">[^<]*prompt cache stays warm/, "tier footnote in themed tooltip");
+  assert.match(html, /class="tip">[^<]*served from cache/, "hit-rate footnote in themed tooltip");
+  assert.ok(!/title=/.test(html), "no native title attribute (uses themeable CSS tooltip)");
   const none = buildPanelHtml(ctxTotals, W, base, 1000, "en", undefined, { tier: null, hitRatePct: null });
   assert.ok(!/>Cache</.test(none), "no cache data → no cache header");
 });
@@ -384,6 +386,16 @@ test("buildView: limit unavailable → used shown in tooltip, NO % in bar (fail-
   });
   assert.ok(!/ctx/.test(v.text), "no context % in the collapsed bar without a limit");
   assert.match(v.tooltip, /context: 468k \(limit n\/a\)/);
+});
+
+test("buildView: limit unavailable WITH a reason → shows it for diagnosability", () => {
+  const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
+    usedTokens: 468_000,
+    limitTokens: null,
+    limitState: "unavailable",
+    limitDetail: "http 403",
+  });
+  assert.match(v.tooltip, /context: 468k \(limit n\/a — http 403\)/);
 });
 
 test("buildView: limit pending → context hidden everywhere (no flicker)", () => {

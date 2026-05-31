@@ -46,7 +46,7 @@ export interface Messages {
   detailsLine: (work: string, cacheRead: string, cacheWrite: string) => string;
   // context window fill
   contextLine: (used: string, limit: string, pct: number) => string;
-  contextNoLimit: (used: string) => string;
+  contextNoLimit: (used: string, detail?: string) => string;
   contextLimitUnavailable: string;
   tariffHeader: string;
   quotaReset: (remaining: string) => string;
@@ -92,7 +92,7 @@ const EN: Messages = {
   detailsLine: (work, cacheRead, cacheWrite) =>
     `work (in+out) ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
   contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
-  contextNoLimit: (used) => `context: ${used} (limit n/a)`,
+  contextNoLimit: (used, detail) => `context: ${used} (limit n/a${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "context limit unavailable",
   tariffHeader: "**Subscription quota (real, from server):**",
   quotaReset: (remaining) => ` · resets in ${remaining}`,
@@ -155,7 +155,7 @@ const RU: Messages = {
   detailsLine: (work, cacheRead, cacheWrite) =>
     `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
   contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
-  contextNoLimit: (used) => `контекст: ${used} (лимит н/д)`,
+  contextNoLimit: (used, detail) => `контекст: ${used} (лимит н/д${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "лимит контекста недоступен",
   tariffHeader: "**Тариф (реальный, с сервера):**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,

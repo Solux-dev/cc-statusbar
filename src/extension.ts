@@ -22,7 +22,10 @@ let inFlight = false;
 // model context-window limits: cached per model id (limits don't change → 24h),
 // persisted in globalState so a restart doesn't refetch. Errors retried sooner.
 const MODEL_LIMIT_TTL_SEC = 24 * 3600;
-const MODEL_LIMIT_RETRY_SEC = 600;
+// Retry an errored/missing limit lookup soon so a transient first-fetch failure
+// (e.g. a fresh install, a momentary network blip) self-heals within ~a minute
+// instead of showing "(limit n/a)" for 10 minutes.
+const MODEL_LIMIT_RETRY_SEC = 60;
 const modelLimits = new Map<string, ModelWindowResult>();
 const limitInFlight = new Set<string>();
 
@@ -81,7 +84,9 @@ function buildContextView(
   if (cached.state === "ok" && cached.maxInputTokens) {
     return { usedTokens, limitTokens: cached.maxInputTokens, limitState: "ok" };
   }
-  return { usedTokens, limitTokens: null, limitState: "unavailable" };
+  // definitive failure → fail visibly, and surface WHY (http code / reason) so a
+  // user can tell a transient blip from a real problem when reporting.
+  return { usedTokens, limitTokens: null, limitState: "unavailable", limitDetail: cached.detail };
 }
 
 function workspaceCwd(): string | null {

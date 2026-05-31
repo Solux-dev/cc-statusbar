@@ -39,6 +39,9 @@ export interface ContextView {
   // "pending" = limit not fetched yet (suppress the line to avoid a flicker of
   // "(limit n/a)"); "unavailable" = a definitive failure → show used + "(n/a)".
   limitState?: "ok" | "pending" | "unavailable";
+  // why the limit is unavailable (e.g. "http 403", a network error) — shown next
+  // to "(limit n/a)" for diagnosability.
+  limitDetail?: string;
 }
 
 /** Cache insight: which TTL tier the main session is on (auto-detected) and the
@@ -76,7 +79,7 @@ function contextLine(ctx: ContextView | undefined, m: Messages): string | null {
   if (!ctx || ctx.usedTokens == null) return null;
   const pct = contextPct(ctx);
   if (pct != null) return m.contextLine(fmtTokens(ctx.usedTokens), fmtTokens(ctx.limitTokens!), pct);
-  if (ctx.limitState === "unavailable") return m.contextNoLimit(fmtTokens(ctx.usedTokens));
+  if (ctx.limitState === "unavailable") return m.contextNoLimit(fmtTokens(ctx.usedTokens), ctx.limitDetail);
   return null; // pending → show nothing yet
 }
 
@@ -169,11 +172,6 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Escape for use inside a double-quoted HTML attribute (e.g. title="..."). */
-function escAttr(s: string): string {
-  return esc(s).replace(/"/g, "&quot;");
-}
-
 /** Full HTML document for the persistent webview panel — same numbers as the
  *  tooltip, themed with VS Code variables. Pure: no VS Code imports, no scripts
  *  (the extension re-renders this string on each tick). */
@@ -240,15 +238,17 @@ export function buildPanelHtml(
   let cacheSection = "";
   if (cache && (cache.tier || cache.hitRatePct != null)) {
     const crows: string[] = [];
+    const hintSpan = (label: string, hint: string): string =>
+      `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
     if (cache.tier) {
       crows.push(
-        `<div class="row"><span class="hint" title="${escAttr(m.panelCacheTierHint)}">${esc(m.panelCacheTierLabel)} ⓘ</span>` +
+        `<div class="row">${hintSpan(m.panelCacheTierLabel, m.panelCacheTierHint)}` +
           `<b>${esc(m.panelCacheTierValue[cache.tier])}</b></div>`
       );
     }
     if (cache.hitRatePct != null) {
       crows.push(
-        `<div class="row"><span class="hint" title="${escAttr(m.panelCacheHitHint)}">${esc(m.panelCacheHitLabel)} ⓘ</span>` +
+        `<div class="row">${hintSpan(m.panelCacheHitLabel, m.panelCacheHitHint)}` +
           `<b>${cache.hitRatePct.toFixed(0)}%</b></div>`
       );
     }
@@ -286,7 +286,17 @@ export function buildPanelHtml(
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
   .muted { opacity:.65; font-size:12px; }
-  .hint { opacity:.9; border-bottom:1px dotted currentColor; cursor:help; }
+  .hint { position:relative; opacity:.9; border-bottom:1px dotted currentColor; cursor:help; outline:none; }
+  .hint .tip {
+    visibility:hidden; opacity:0; position:absolute; left:0; bottom:140%; z-index:10;
+    width:max-content; max-width:300px; padding:8px 10px; border-radius:6px;
+    font-size:12px; font-weight:normal; line-height:1.45; white-space:normal; text-align:left;
+    background:var(--vscode-editorHoverWidget-background, var(--vscode-menu-background, #252526));
+    color:var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+    border:1px solid var(--vscode-editorHoverWidget-border, rgba(128,128,128,.35));
+    box-shadow:0 2px 8px rgba(0,0,0,.35); transition:opacity .1s ease; pointer-events:none;
+  }
+  .hint:hover .tip, .hint:focus .tip { visibility:visible; opacity:1; }
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>

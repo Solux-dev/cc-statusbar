@@ -3,6 +3,23 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.1] — 2026-05-31
+
+### Fixed
+
+- **Panel hover footnotes now follow the editor theme.** They used the OS-native
+  `title` tooltip, which renders on a light background regardless of theme and
+  was hard to read in dark mode. Replaced with a themeable CSS tooltip using VS
+  Code's hover-widget colours, so it's dark in dark themes and light in light
+  themes.
+
+### Changed
+
+- **Context-limit failures are now diagnosable.** When the context-window limit
+  can't be fetched, the tooltip shows the reason (e.g. `limit n/a — http 403`),
+  and a failed lookup is retried within ~a minute instead of 10 — so a transient
+  first-fetch glitch (common right after install) self-heals quickly.
+
 ## [1.0.0] — 2026-05-31
 
 First stable release. The extension now sells exactly what a Claude Code
