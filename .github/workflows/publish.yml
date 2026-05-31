@@ -31,11 +31,6 @@ jobs:
       - name: Package .vsix
         run: npx --yes @vscode/vsce@latest package --no-dependencies -o extension.vsix
 
-      - name: Publish to VS Code Marketplace
-        run: npx --yes @vscode/vsce@latest publish --packagePath extension.vsix -p "$VSCE_PAT"
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-
       - name: Publish to Open VSX
         run: npx --yes ovsx publish extension.vsix -p "$OVSX_PAT"
         env:
