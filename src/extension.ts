@@ -4,7 +4,7 @@
 import * as vscode from "vscode";
 import { readSessionTotals } from "./transcript";
 import { fetchQuota, fetchModelWindow, shouldPoll, QuotaResult, ModelWindowResult } from "./quota";
-import { buildView, buildPanelHtml, QuotaView, ContextView } from "./render";
+import { buildView, buildPanelHtml, QuotaView, ContextView, CacheView } from "./render";
 import { Weights, ContextInfo } from "./metrics";
 import { resolveLang, messages, LangSetting } from "./i18n";
 
@@ -106,9 +106,10 @@ async function tick() {
     return;
   }
 
-  const { totals, mtimeMs, context } = readSessionTotals(cwd);
+  const { totals, mtimeMs, context, cacheTier, cacheHitRatePct } = readSessionTotals(cwd);
   const nowSec = Math.floor(Date.now() / 1000);
   const contextView = buildContextView(context, conf.contextEnabled, conf.credentialsPath, nowSec);
+  const cacheView: CacheView = { tier: cacheTier, hitRatePct: cacheHitRatePct };
 
   // quota: throttled + activity-gated; never blocks the UI tick
   let quotaView: QuotaView;
@@ -138,7 +139,7 @@ async function tick() {
       : { fiveH: null, sevenD: null, state: "error" };
   }
 
-  const view = buildView(totals, conf.weights, quotaView, nowSec, lang, contextView);
+  const view = buildView(totals, conf.weights, quotaView, nowSec, lang, contextView, cacheView);
   item.text = view.text;
   const md = new vscode.MarkdownString(view.tooltip);
   // trusted so the tooltip's command links are clickable; only our own
@@ -155,7 +156,7 @@ async function tick() {
 
   // keep the (optional) persistent panel live
   if (panel) {
-    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang, contextView);
+    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang, contextView, cacheView);
   }
 }
 

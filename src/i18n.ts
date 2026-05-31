@@ -68,6 +68,14 @@ export interface Messages {
   panelQuotaHeader: string;
   panelLocalAccurate: string;
   panelLegend: string;
+  // cache insight (tier + descriptive hit rate)
+  cacheTierLine: (tier: "1h" | "5m") => string; // concise tooltip line
+  panelCacheHeader: string;
+  panelCacheTierLabel: string;
+  panelCacheTierValue: Record<"1h" | "5m", string>;
+  panelCacheTierHint: string; // hover footnote
+  panelCacheHitLabel: string;
+  panelCacheHitHint: string; // hover footnote
 }
 
 const EN: Messages = {
@@ -114,6 +122,23 @@ const EN: Messages = {
   panelQuotaHeader: "Subscription quota (real, from server)",
   panelLocalAccurate: "The numbers above come from the local transcript — always accurate.",
   panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
+  cacheTierLine: (tier) =>
+    tier === "1h"
+      ? "🗄 Cache: 1-hour tier — survives ~1h idle"
+      : "🗄 Cache: 5-minute tier — pauses over 5 min rebuild it",
+  panelCacheHeader: "Cache",
+  panelCacheTierLabel: "Tier",
+  panelCacheTierValue: { "1h": "1-hour", "5m": "5-minute" },
+  panelCacheTierHint:
+    "How long your prompt cache stays warm while you are idle — read from this session, not configured. " +
+    "1-hour: a subscription within its plan limit, so stepping away for up to an hour stays cheap. " +
+    "5-minute: an API key, paid usage after you pass your plan limit, or subagents — short breaks rebuild the cache and cost more. " +
+    "Check it once to know how long a break you can take; you do not need to watch it.",
+  panelCacheHitLabel: "Input from cache",
+  panelCacheHitHint:
+    "Share of your prompt served from cache (cheap) instead of re-read fresh. Higher means the cache is being reused well. " +
+    "It is normal to start low and climb as the session warms up; a persistently low value usually means frequent model/effort switches or many new files. " +
+    "A descriptive read of where this session's tokens went — not a score.",
 };
 
 const RU: Messages = {
@@ -160,6 +185,23 @@ const RU: Messages = {
   panelQuotaHeader: "Тариф (реальный, с сервера)",
   panelLocalAccurate: "Числа выше — из локального транскрипта, всегда точны.",
   panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",
+  cacheTierLine: (tier) =>
+    tier === "1h"
+      ? "🗄 Кэш: часовой тир — живёт ~1ч простоя"
+      : "🗄 Кэш: 5-мин тир — паузы дольше 5 мин перестраивают его",
+  panelCacheHeader: "Кэш",
+  panelCacheTierLabel: "Тир",
+  panelCacheTierValue: { "1h": "часовой", "5m": "5-минутный" },
+  panelCacheTierHint:
+    "Сколько prompt-кэш остаётся «тёплым», пока вы не печатаете — определяется из этой сессии, не настраивается. " +
+    "Часовой: подписка в пределах лимита плана — можно отойти на час, и это дёшево. " +
+    "5-минутный: API-ключ, платный расход после превышения плана или субагенты — короткие паузы перестраивают кэш и стоят дороже. " +
+    "Достаточно глянуть один раз, чтобы понять, какую паузу можно себе позволить; постоянно следить не нужно.",
+  panelCacheHitLabel: "Ввод из кэша",
+  panelCacheHitHint:
+    "Доля промпта, обслуженная из кэша (дёшево), а не прочитанная заново. Выше — кэш переиспользуется хорошо. " +
+    "Нормально начинать с низкого и расти по мере прогрева сессии; стабильно низкое обычно значит частые переключения модели/effort или много новых файлов. " +
+    "Это описание того, куда ушли токены сессии, — не оценка.",
 };
 
 const TABLE: Record<Lang, Messages> = { en: EN, ru: RU };

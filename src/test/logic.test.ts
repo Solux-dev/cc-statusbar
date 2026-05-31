@@ -9,6 +9,8 @@ import {
   paceLevel,
   contextLevel,
   lastAssistantContext,
+  cacheHitRatePct,
+  lastCacheTier,
   parseRateLimitHeaders,
   WINDOW_5H_SECONDS,
 } from "../metrics";
@@ -93,14 +95,37 @@ test("fmtMult: one decimal, drops trailing .0", () => {
   assert.equal(fmtMult(6.84), "6.8");
 });
 
-test("contextLevel: fixed-fill thresholds (NOT pace)", () => {
+test("contextLevel: informational dot thresholds (<50 🟢 · 50–80 🟡 · ≥80 🔴)", () => {
   assert.equal(contextLevel(0), "normal");
-  assert.equal(contextLevel(47), "normal");
-  assert.equal(contextLevel(84), "normal");
-  assert.equal(contextLevel(85), "tight");
-  assert.equal(contextLevel(94), "tight");
-  assert.equal(contextLevel(95), "over");
+  assert.equal(contextLevel(49), "normal");
+  assert.equal(contextLevel(50), "tight");
+  assert.equal(contextLevel(79), "tight");
+  assert.equal(contextLevel(80), "over");
   assert.equal(contextLevel(100), "over");
+});
+
+test("cacheHitRatePct: read / (read + write + input); null when empty", () => {
+  assert.equal(cacheHitRatePct({ input: 1000, output: 0, work: 1000, cacheRead: 8000, cacheWrite: 1000 }), 80);
+  assert.equal(cacheHitRatePct({ input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 }), null);
+});
+
+test("lastCacheTier: last MAIN write-turn decides; sidechain + breakdown-less ignored", () => {
+  const raw = [
+    JSON.stringify({ type: "assistant", message: { usage: { cache_creation: { ephemeral_1h_input_tokens: 100, ephemeral_5m_input_tokens: 0 } } } }),
+    // a subagent 5m write must NOT flip the main tier
+    JSON.stringify({ type: "assistant", isSidechain: true, message: { usage: { cache_creation: { ephemeral_5m_input_tokens: 999, ephemeral_1h_input_tokens: 0 } } } }),
+    // a read-only / breakdown-less turn leaves the tier unchanged
+    JSON.stringify({ type: "assistant", message: { usage: { cache_read_input_tokens: 50 } } }),
+  ].join("\n");
+  assert.equal(lastCacheTier(raw), "1h");
+});
+
+test("lastCacheTier: 5m detected; null when no write turn", () => {
+  const fivem = JSON.stringify({ type: "assistant", message: { usage: { cache_creation: { ephemeral_5m_input_tokens: 200, ephemeral_1h_input_tokens: 0 } } } });
+  assert.equal(lastCacheTier(fivem), "5m");
+  assert.equal(lastCacheTier(""), null);
+  const noWrite = JSON.stringify({ type: "assistant", message: { usage: { cache_read_input_tokens: 50 } } });
+  assert.equal(lastCacheTier(noWrite), null);
 });
 
 test("lastAssistantContext: last assistant turn wins, main-only numerator + model id", () => {
@@ -289,9 +314,9 @@ test("buildView: context segment in collapsed bar + line in tooltip (en)", () =>
     limitTokens: 1_000_000,
     limitState: "ok",
   });
-  // 468k / 1M = 47% → normal fill → no dot, appended after the eff fallback
-  assert.match(v.text, /· ctx 47%$/);
-  assert.ok(!/🟡|🔴/.test(v.text), "normal fill has no warning dot");
+  // 468k / 1M = 47% → <50% → 🟢 informational dot, appended after the eff fallback
+  assert.match(v.text, /· 🟢 ctx 47%$/);
+  assert.ok(!/🟡|🔴/.test(v.text), "47% is green, not a warning");
   assert.match(v.tooltip, /- context: 47% \(468k \/ 1M\)/);
 });
 
@@ -303,22 +328,22 @@ test("buildView: context segment in collapsed bar (ru) appended after tariff", (
     sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 },
   }, now, "ru", { usedTokens: 468_000, limitTokens: 1_000_000, limitState: "ok" });
   assert.match(v.text, /🟢 5ч 24%/);
-  assert.match(v.text, /· конт 47%$/);
+  assert.match(v.text, /· 🟢 конт 47%$/);
   assert.match(v.tooltip, /контекст: 47% \(468k \/ 1M\)/);
 });
 
-test("buildView: context ≥85% gets a warning dot but does NOT change item level", () => {
+test("buildView: 🟡 mid-fill (50–80%) is informational — does NOT change item level", () => {
   const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
-    usedTokens: 900_000,
+    usedTokens: 600_000,
     limitTokens: 1_000_000,
     limitState: "ok",
   });
-  assert.match(v.text, /🟡 ctx 90%/);
+  assert.match(v.text, /🟡 ctx 60%/);
   // item background stays tariff-pace; context fill must NOT drive it
   assert.equal(v.level, "normal");
 });
 
-test("buildView: context ≥95% → red dot in segment", () => {
+test("buildView: context ≥80% → 🔴 dot, still does not tint the bar", () => {
   const v = buildView(ctxTotals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en", {
     usedTokens: 970_000,
     limitTokens: 1_000_000,
@@ -326,6 +351,29 @@ test("buildView: context ≥95% → red dot in segment", () => {
   });
   assert.match(v.text, /🔴 ctx 97%/);
   assert.equal(v.level, "normal");
+});
+
+test("buildView: cache tier line in tooltip (concise); absent when tier null", () => {
+  const base = { state: "disabled" as const, fiveH: null, sevenD: null };
+  const v1h = buildView(ctxTotals, W, base, 1000, "en", undefined, { tier: "1h", hitRatePct: 82 });
+  assert.match(v1h.tooltip, /Cache: 1-hour tier/);
+  const v5m = buildView(ctxTotals, W, base, 1000, "ru", undefined, { tier: "5m", hitRatePct: 40 });
+  assert.match(v5m.tooltip, /5-мин тир/);
+  const none = buildView(ctxTotals, W, base, 1000, "en", undefined, { tier: null, hitRatePct: null });
+  assert.ok(!/Cache:/.test(none.tooltip), "no tier → no cache line");
+});
+
+test("buildPanelHtml: cache section — tier + hit rate + hover footnotes; hidden when empty", () => {
+  const base = { state: "disabled" as const, fiveH: null, sevenD: null };
+  const html = buildPanelHtml(ctxTotals, W, base, 1000, "en", undefined, { tier: "1h", hitRatePct: 82 });
+  assert.match(html, />Cache</);
+  assert.match(html, /1-hour/);
+  assert.match(html, /Input from cache/);
+  assert.match(html, /<b>82%<\/b>/);
+  assert.match(html, /title="[^"]*prompt cache stays warm/, "tier footnote present");
+  assert.match(html, /title="[^"]*served from cache/, "hit-rate footnote present");
+  const none = buildPanelHtml(ctxTotals, W, base, 1000, "en", undefined, { tier: null, hitRatePct: null });
+  assert.ok(!/>Cache</.test(none), "no cache data → no cache header");
 });
 
 test("buildView: limit unavailable → used shown in tooltip, NO % in bar (fail-visibly)", () => {

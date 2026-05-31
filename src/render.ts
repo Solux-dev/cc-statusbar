@@ -41,6 +41,13 @@ export interface ContextView {
   limitState?: "ok" | "pending" | "unavailable";
 }
 
+/** Cache insight: which TTL tier the main session is on (auto-detected) and the
+ *  descriptive share of input served from cache. Both nullable — null → hidden. */
+export interface CacheView {
+  tier: "1h" | "5m" | null;
+  hitRatePct: number | null;
+}
+
 export interface View {
   text: string;
   tooltip: string;
@@ -53,14 +60,14 @@ function contextPct(ctx?: ContextView): number | null {
   return Math.round((ctx.usedTokens / ctx.limitTokens) * 100);
 }
 
-/** Collapsed-bar context segment: `ctx 47%`, dot-prefixed only when ≥85% so the
- *  bar stays clean at normal fill. Null → omit (no limit, or no context yet). */
+/** Collapsed-bar context segment: `🟢 ctx 47%`. The dot is INFORMATIONAL only
+ *  (🟢 <50% · 🟡 50–80% · 🔴 ≥80%) and never tints the whole bar — context is a
+ *  "room for the next step" read, not a quota with consequences. Null → omit
+ *  (no limit, or no context yet). */
 function contextSegment(ctx: ContextView | undefined, m: Messages): string | null {
   const pct = contextPct(ctx);
   if (pct == null) return null;
-  const lvl = contextLevel(pct);
-  const prefix = lvl === "normal" ? "" : `${dot(lvl)} `;
-  return `${prefix}${m.ctxShort} ${pct}%`;
+  return `${dot(contextLevel(pct))} ${m.ctxShort} ${pct}%`;
 }
 
 /** Context line for tooltip/panel: full `context: X% (used / limit)`, or
@@ -88,7 +95,8 @@ export function buildView(
   quota: QuotaView,
   nowSec: number,
   lang: Lang = "en",
-  context?: ContextView
+  context?: ContextView,
+  cache?: CacheView
 ): View {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -144,6 +152,8 @@ export function buildView(
   }
   const cl = contextLine(context, m);
   if (cl) t.push(`- ${cl}`);
+  // cache tier — concise, self-explanatory (full footnotes live in the panel)
+  if (cache?.tier) t.push(`- ${m.cacheTierLine(cache.tier)}`);
   t.push("");
   // muted technical breakdown
   t.push(`_${m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite))}_`);
@@ -159,6 +169,11 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Escape for use inside a double-quoted HTML attribute (e.g. title="..."). */
+function escAttr(s: string): string {
+  return esc(s).replace(/"/g, "&quot;");
+}
+
 /** Full HTML document for the persistent webview panel — same numbers as the
  *  tooltip, themed with VS Code variables. Pure: no VS Code imports, no scripts
  *  (the extension re-renders this string on each tick). */
@@ -168,7 +183,8 @@ export function buildPanelHtml(
   quota: QuotaView,
   nowSec: number,
   lang: Lang = "en",
-  context?: ContextView
+  context?: ContextView,
+  cache?: CacheView
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -219,6 +235,26 @@ export function buildPanelHtml(
       ctxRow;
   }
 
+  // cache insight: auto-detected tier + descriptive hit rate, each with a
+  // hover footnote (title=) so any user can learn what the line means.
+  let cacheSection = "";
+  if (cache && (cache.tier || cache.hitRatePct != null)) {
+    const crows: string[] = [];
+    if (cache.tier) {
+      crows.push(
+        `<div class="row"><span class="hint" title="${escAttr(m.panelCacheTierHint)}">${esc(m.panelCacheTierLabel)} ⓘ</span>` +
+          `<b>${esc(m.panelCacheTierValue[cache.tier])}</b></div>`
+      );
+    }
+    if (cache.hitRatePct != null) {
+      crows.push(
+        `<div class="row"><span class="hint" title="${escAttr(m.panelCacheHitHint)}">${esc(m.panelCacheHitLabel)} ⓘ</span>` +
+          `<b>${cache.hitRatePct.toFixed(0)}%</b></div>`
+      );
+    }
+    cacheSection = `<h3>${esc(m.panelCacheHeader)}</h3>${crows.join("")}`;
+  }
+
   // muted technical breakdown
   const detailsSection =
     `<h3>${esc(m.panelDetailsHeader)}</h3>` +
@@ -250,6 +286,7 @@ export function buildPanelHtml(
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
   .muted { opacity:.65; font-size:12px; }
+  .hint { opacity:.9; border-bottom:1px dotted currentColor; cursor:help; }
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>
@@ -257,6 +294,7 @@ export function buildPanelHtml(
   <h2>${esc(m.panelTitle)}</h2>
   ${rows.join("\n  ")}
   ${quotaSection}
+  ${cacheSection}
   ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
 </body>

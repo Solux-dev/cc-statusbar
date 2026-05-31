@@ -110,14 +110,57 @@ export function lastAssistantContext(raw: string): ContextInfo {
   return { tokens, modelId };
 }
 
-/** Context fill colour level — a FIXED threshold, deliberately NOT paceLevel.
- *  Context has no reset and no time, so a pace/time projection is meaningless:
- *  only "how full" matters. Reuses the pace COLOUR palette (normal/tight/over)
- *  via thresholds ≥85% → tight, ≥95% → over. (Spec 0.4.0.) */
+/** Context-fill colour dot. Purely INFORMATIONAL: context has no reset and no
+ *  consequence like a quota limit, so this dot NEVER drives the status-bar
+ *  background (see buildView) — it only colours its own segment. Thresholds
+ *  (owner 2026-05-31): <50% 🟢 · 50–80% 🟡 · ≥80% 🔴 — a glanceable "how much
+ *  room is left for the next step". */
 export function contextLevel(pct: number): PaceLevel {
-  if (pct >= 95) return "over";
-  if (pct >= 85) return "tight";
+  if (pct >= 80) return "over";
+  if (pct >= 50) return "tight";
   return "normal";
+}
+
+/** Which prompt-cache TTL tier the session is on. Read from the data, never
+ *  assumed — Anthropic's behaviour shifts silently (see research addendum). */
+export type CacheTier = "1h" | "5m" | null;
+
+/** Descriptive cache-hit rate: share of input tokens served from cache (cheap,
+ *  ×0.1) vs freshly processed. `cacheRead / (cacheRead + cacheWrite + input)`,
+ *  0..100. Null when no input yet. DESCRIPTIVE, not a score — it is normal to
+ *  start low and climb as a session warms up. */
+export function cacheHitRatePct(t: Totals): number | null {
+  const denom = t.cacheRead + t.cacheWrite + t.input;
+  if (denom <= 0) return null;
+  return Math.round((t.cacheRead / denom) * 100);
+}
+
+/** The MAIN session's current cache tier, decided by the most recent
+ *  main-conversation assistant turn that WROTE to cache: "1h" / "5m" from the
+ *  nested `cache_creation.ephemeral_{1h,5m}_input_tokens`. Null when no write
+ *  turn is observable (or only old transcripts lacking the nested breakdown).
+ *  Subagents (`isSidechain`) are always 5m and are excluded so they can't
+ *  confound the main tier. */
+export function lastCacheTier(raw: string): CacheTier {
+  let tier: CacheTier = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (obj?.type !== "assistant" || !obj.message) continue;
+    if (obj.isSidechain) continue;
+    const c = obj.message.usage?.cache_creation;
+    if (!c) continue;
+    if ((c.ephemeral_1h_input_tokens || 0) > 0) tier = "1h";
+    else if ((c.ephemeral_5m_input_tokens || 0) > 0) tier = "5m";
+    // a write-less or breakdown-less turn leaves the previous tier unchanged
+  }
+  return tier;
 }
 
 export function addTotals(a: Totals, b: Totals): Totals {

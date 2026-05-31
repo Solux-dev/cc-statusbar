@@ -5,7 +5,17 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { Totals, ContextInfo, sumTranscript, addTotals, emptyTotals, lastAssistantContext } from "./metrics";
+import {
+  Totals,
+  ContextInfo,
+  CacheTier,
+  sumTranscript,
+  addTotals,
+  emptyTotals,
+  lastAssistantContext,
+  lastCacheTier,
+  cacheHitRatePct,
+} from "./metrics";
 
 /** Claude Code's project slug: cwd with : \ / _ all replaced by '-'.
  *  Matches session-cost.py get_project_slug(). */
@@ -57,15 +67,29 @@ export function readSessionTotals(cwd: string): {
   transcript: string | null;
   mtimeMs: number;
   context: ContextInfo;
+  cacheTier: CacheTier;
+  cacheHitRatePct: number | null;
 } {
   const main = findActiveTranscript(cwd);
   if (!main) {
-    return { totals: emptyTotals(), transcript: null, mtimeMs: 0, context: { tokens: null, modelId: null } };
+    return {
+      totals: emptyTotals(),
+      transcript: null,
+      mtimeMs: 0,
+      context: { tokens: null, modelId: null },
+      cacheTier: null,
+      cacheHitRatePct: null,
+    };
   }
 
   const mainRaw = readFileSafe(main);
-  let totals = sumTranscript(mainRaw);
+  const mainTotals = sumTranscript(mainRaw);
+  let totals = mainTotals;
   const context = lastAssistantContext(mainRaw); // MAIN only — do NOT include subagents
+  // Cache insight describes the MAIN session only (consistent with the tier,
+  // which is main-only): subagents are 5m + short-lived and would mix tiers.
+  const cacheTier = lastCacheTier(mainRaw);
+  const cacheHit = cacheHitRatePct(mainTotals);
   let mtimeMs = 0;
   try {
     mtimeMs = fs.statSync(main).mtimeMs;
@@ -85,5 +109,5 @@ export function readSessionTotals(cwd: string): {
     /* no subagents dir — fine */
   }
 
-  return { totals, transcript: main, mtimeMs, context };
+  return { totals, transcript: main, mtimeMs, context, cacheTier, cacheHitRatePct: cacheHit };
 }
