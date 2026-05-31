@@ -37,6 +37,21 @@ export function emptyTotals(): Totals {
   return { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
+/** Cache-write tokens for one usage block, robust across Claude Code versions.
+ *  Prefer the top-level `cache_creation_input_tokens`, but fall back to the
+ *  nested per-TTL breakdown: on Claude Code < v2.1.152 the top-level field could
+ *  report 0 while only `cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens`
+ *  carried the real value (fixed in the v2.1.152 changelog, 2026-05-27).
+ *  Current transcripts populate the top-level field, so this only matters for
+ *  older sessions — verified against real data 2026-05-31. */
+export function cacheWriteTokens(u: any): number {
+  const top = u?.cache_creation_input_tokens || 0;
+  if (top) return top;
+  const c = u?.cache_creation;
+  if (c) return (c.ephemeral_5m_input_tokens || 0) + (c.ephemeral_1h_input_tokens || 0);
+  return 0;
+}
+
 /** Effective (cache-weighted) tokens — comparable consumption number. */
 export function effectiveTokens(t: Totals, w: Weights): number {
   return Math.round(t.work + w.cacheRead * t.cacheRead + w.cacheWrite * t.cacheWrite);
@@ -56,10 +71,11 @@ export function sumTranscript(raw: string): Totals {
       continue; // tolerate a partial last line mid-write
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
+    if (obj.isSidechain) continue; // subagent turn — counted via its own agent-*.jsonl, not here
     const u = obj.message.usage || {};
     t.input += u.input_tokens || 0;
     t.output += u.output_tokens || 0;
-    t.cacheWrite += u.cache_creation_input_tokens || 0;
+    t.cacheWrite += cacheWriteTokens(u);
     t.cacheRead += u.cache_read_input_tokens || 0;
   }
   t.work = t.input + t.output;
@@ -84,10 +100,11 @@ export function lastAssistantContext(raw: string): ContextInfo {
       continue; // tolerate a partial last line mid-write
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
+    if (obj.isSidechain) continue; // subagent has its OWN window — must never set main context
     const u = obj.message.usage;
     if (!u) continue;
     // latest assistant turn with usage overwrites → ends as the last one.
-    tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + cacheWriteTokens(u);
     if (typeof obj.message.model === "string" && obj.message.model) modelId = obj.message.model;
   }
   return { tokens, modelId };

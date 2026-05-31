@@ -44,6 +44,39 @@ test("sumTranscript: counts only assistant usage, tolerates junk line", () => {
   assert.equal(t.cacheWrite, 200);
 });
 
+test("sumTranscript: falls back to nested cache_creation when top-level is 0 (<v2.1.152)", () => {
+  // top-level cache_creation_input_tokens missing/0, value only in the nested breakdown
+  const raw = JSON.stringify({
+    type: "assistant",
+    message: { usage: { input_tokens: 10, output_tokens: 5, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 4812 } } },
+  });
+  const t = sumTranscript(raw);
+  assert.equal(t.cacheWrite, 4812);
+});
+
+test("sumTranscript: excludes subagent (isSidechain) turns from main totals", () => {
+  const raw = [
+    JSON.stringify({ type: "assistant", isSidechain: true, message: { usage: { input_tokens: 999, output_tokens: 999, cache_read_input_tokens: 999, cache_creation_input_tokens: 999 } } }),
+    JSON.stringify({ type: "assistant", message: { usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 } } }),
+  ].join("\n");
+  const t = sumTranscript(raw);
+  assert.equal(t.input, 100);
+  assert.equal(t.output, 50);
+  assert.equal(t.cacheRead, 1000);
+  assert.equal(t.cacheWrite, 200);
+});
+
+test("lastAssistantContext: a trailing subagent turn must NOT become the main context", () => {
+  const raw = [
+    JSON.stringify({ type: "assistant", message: { model: "claude-opus-4-8", usage: { input_tokens: 200, cache_read_input_tokens: 468000, cache_creation_input_tokens: 0 } } }),
+    JSON.stringify({ type: "assistant", isSidechain: true, message: { model: "claude-haiku-4-5", usage: { input_tokens: 5, cache_read_input_tokens: 5, cache_creation_input_tokens: 5 } } }),
+  ].join("\n");
+  const c = lastAssistantContext(raw);
+  // main turn wins, not the trailing subagent turn
+  assert.equal(c.tokens, 468200);
+  assert.equal(c.modelId, "claude-opus-4-8");
+});
+
 test("fmtTokens", () => {
   assert.equal(fmtTokens(500), "500");
   assert.equal(fmtTokens(1500), "1.5k");

@@ -6,6 +6,17 @@ Marketplace — owner publishes manually).
 This file is the **resume point** for the next cc-statusbar session. Read it
 first.
 
+> **UPDATE 2026-05-31 (later same day):** the research tasks below were DONE and
+> the cache-TTL question was verified across many sources + the owner's own
+> transcript. See [`research-2026-05-31-findings.md`](research-2026-05-31-findings.md)
+> for the authoritative result. **Key correction to this file:** the "pause
+> >5 min cools the cache" assumption is WRONG for subscribers — Claude Code on a
+> Pro/Max subscription auto-uses the **1-hour** TTL (5-min is API-key / overage /
+> subagents only). Decision taken: head to v1.0; the correct design is to
+> **auto-detect the cache tier per-turn** from the transcript, never hardcode a
+> TTL. Two defensive parser hardenings already landed (nested cache_creation
+> fallback + isSidechain guard, tests green).
+
 ---
 
 ## Decision this session: stop piling features, focus on the real value
