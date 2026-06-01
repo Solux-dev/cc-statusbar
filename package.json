@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude Code Usage — Quota & Context Statusbar",
   "description": "See your real 5h / 7d Claude Code subscription quota and how full the model's context window is — right in the VS Code status bar. Plus an auto-detected prompt-cache tier (1h/5m) and session cache stats. Reads local transcripts; fetches real rate limits with your existing token.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",

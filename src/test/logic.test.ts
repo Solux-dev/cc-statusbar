@@ -16,6 +16,7 @@ import {
 } from "../metrics";
 import { buildView, buildPanelHtml } from "../render";
 import { resolveLang, messages } from "../i18n";
+import { attemptTimeoutsMs, isRetryableStatus } from "../quota";
 
 const W = { cacheRead: 0.1, cacheWrite: 1.25 };
 const EN_UNITS = messages("en").units;
@@ -422,6 +423,36 @@ test("buildPanelHtml: context line rendered when limit known (both langs)", () =
   assert.match(en, /context: 47% \(468k \/ 1M\)/);
   const ru = buildPanelHtml(ctxTotals, W, q, now, "ru", ctx);
   assert.match(ru, /контекст: 47% \(468k \/ 1M\)/);
+});
+
+test("attemptTimeoutsMs: escalating schedule, no RTT history → base", () => {
+  assert.deepEqual(attemptTimeoutsMs(0), [6000, 14000, 22000]);
+  assert.deepEqual(attemptTimeoutsMs(), [6000, 14000, 22000]);
+  // strictly increasing so each retry is more patient than the last
+  const s = attemptTimeoutsMs(0);
+  assert.ok(s[0] < s[1] && s[1] < s[2]);
+});
+
+test("attemptTimeoutsMs: adapts to a slow link by flooring attempts at ~2× last RTT", () => {
+  // last round-trip 8s → floor 16s: the short first attempt is lifted, not wasted
+  assert.deepEqual(attemptTimeoutsMs(8000), [16000, 16000, 22000]);
+  // a fast link (1s) leaves the base schedule untouched
+  assert.deepEqual(attemptTimeoutsMs(1000), [6000, 14000, 22000]);
+  // floor is capped at 30s so a pathological sample can't blow up the budget
+  assert.deepEqual(attemptTimeoutsMs(60000), [30000, 30000, 30000]);
+});
+
+test("isRetryableStatus: transient (timeouts/5xx) retried, auth/4xx not", () => {
+  assert.equal(isRetryableStatus(500), true);
+  assert.equal(isRetryableStatus(502), true);
+  assert.equal(isRetryableStatus(529), true); // Anthropic "overloaded"
+  assert.equal(isRetryableStatus(408), true);
+  assert.equal(isRetryableStatus(425), true);
+  assert.equal(isRetryableStatus(401), false); // auth — retry won't help
+  assert.equal(isRetryableStatus(403), false);
+  assert.equal(isRetryableStatus(400), false);
+  assert.equal(isRetryableStatus(404), false);
+  assert.equal(isRetryableStatus(200), false);
 });
 
 test("buildView: over pace yields over level (item color)", () => {

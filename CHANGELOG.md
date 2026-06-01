@@ -3,6 +3,33 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.3] — 2026-06-01
+
+### Fixed
+
+- **Quota & context now survive slow, high-latency links** (VPN tunnels,
+  remote/cloud-hosted Claude Code, users on the move). The quota and
+  context-window requests used a single attempt with undici's ~10s connect
+  timeout, so a route to `api.anthropic.com` that answered in, say, 8–15s would
+  intermittently time out — making the **5h / 7d tariff blink in and out** while
+  the main agent (which tolerates the latency) kept working. Both requests now
+  use a **resilient transport**: a few sequential attempts with **escalating
+  per-attempt timeouts** (6s → 14s → 22s) so a healthy link still returns fast
+  while a slow link succeeds on a later, more patient attempt. The transport
+  **adapts** — it remembers the last successful round-trip and pre-sizes the next
+  poll's timeouts to the user's real link speed, so a consistently slow channel
+  stops failing its early attempts. Only transient failures (timeouts, `5xx`,
+  `429`-aside) are retried; auth errors are not. Worst case is bounded (~42s) and
+  still costs at most ~1 token per (already throttled) poll.
+
+### Notes
+
+- This covers **tunnel** VPNs (WireGuard/AmneziaWG/OpenVPN) and direct/no-VPN
+  setups, which already routed correctly at the OS layer — the fix adds patience
+  for their latency. **Proxy-mode** VPNs (a local SOCKS/HTTP proxy) are a separate
+  axis: Node's `fetch` does not honour proxy settings, so that case still needs
+  explicit proxy support (tracked separately, as it implies a dependency).
+
 ## [1.0.2] — 2026-06-01
 
 Docs/release-plumbing only — no extension code changes.
