@@ -17,10 +17,13 @@ import {
   cacheHitRatePct,
 } from "./metrics";
 
-/** Claude Code's project slug: cwd with : \ / _ all replaced by '-'.
- *  Matches session-cost.py get_project_slug(). */
+/** Claude Code's project slug: every non-alphanumeric char in the cwd replaced
+ *  by '-' (so ':', '\', '/', '_', spaces, dots, parens … all collapse to '-').
+ *  Must match Claude Code's own slug exactly — e.g. "…\My_Projects\Kasta Rico"
+ *  → "…-My-Projects-Kasta-Rico". A narrower class (e.g. only [:\\/_]) silently
+ *  fails to find sessions for any folder whose name contains a space. */
 export function projectSlug(cwd: string): string {
-  return cwd.replace(/[:\\/_]/g, "-");
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 function projectsRoot(): string {

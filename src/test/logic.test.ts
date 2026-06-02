@@ -17,6 +17,7 @@ import {
 import { buildView, buildPanelHtml } from "../render";
 import { resolveLang, messages } from "../i18n";
 import { attemptTimeoutsMs, isRetryableStatus } from "../quota";
+import { projectSlug } from "../transcript";
 
 const W = { cacheRead: 0.1, cacheWrite: 1.25 };
 const EN_UNITS = messages("en").units;
@@ -464,4 +465,18 @@ test("buildView: over pace yields over level (item color)", () => {
     sevenD: null,
   }, now, "en");
   assert.equal(v.level, "over");
+});
+
+test("projectSlug: replaces every non-alphanumeric char (incl. spaces) like Claude Code", () => {
+  // regression: a space in the folder name must collapse to '-' so the session
+  // dir is found. Was the bug behind "extension shows nothing" on "Kasta Rico".
+  assert.equal(
+    projectSlug("c:\\Users\\Honor\\Desktop\\My_Projects\\Kasta Rico"),
+    "c--Users-Honor-Desktop-My-Projects-Kasta-Rico"
+  );
+  // existing space-free paths must be unchanged (no regression).
+  assert.equal(
+    projectSlug("c:\\Users\\Honor\\Desktop\\My_Projects\\cc-statusbar"),
+    "c--Users-Honor-Desktop-My-Projects-cc-statusbar"
+  );
 });

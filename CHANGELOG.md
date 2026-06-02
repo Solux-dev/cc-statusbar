@@ -3,6 +3,22 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.4] — 2026-06-02
+
+### Fixed
+
+- **The status bar now appears for projects whose folder name contains a space**
+  (or any non-alphanumeric character — dots, parentheses, etc.). The extension
+  locates a project's Claude Code session by reconstructing Claude Code's project
+  slug from the workspace path, but the slug builder only collapsed `: \ / _` to
+  `-` and **left spaces intact** — so for a folder like `Kasta Rico` it looked in
+  `…-Kasta Rico` while Claude Code had written the session to `…-Kasta-Rico`. The
+  transcript was never found, so the bar showed only an empty fallback and looked
+  broken. The slug now collapses **every** non-alphanumeric character to `-`,
+  exactly matching Claude Code's own slug. Folders without such characters are
+  unaffected. This hit any path with a space — common on Windows
+  (`C:\Users\First Last\…`). Added a regression test.
+
 ## [1.0.3] — 2026-06-01
 
 ### Fixed
