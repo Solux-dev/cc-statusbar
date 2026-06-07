@@ -1,8 +1,8 @@
 {
   "name": "cc-statusbar",
-  "displayName": "Claude Code Usage — Quota & Context Statusbar",
-  "description": "See your real 5h / 7d Claude Code subscription quota and how full the model's context window is — right in the VS Code status bar. Plus an auto-detected prompt-cache tier (1h/5m) and session cache stats. Reads local transcripts; fetches real rate limits with your existing token.",
-  "version": "1.0.4",
+  "displayName": "Claude/Codex Usage — Quota & Context Statusbar",
+  "description": "See Claude Code and Codex quota, context, token-equivalent, and cache signals right in the VS Code status bar. Switch between Auto, Claude Code, and Codex from the hover menu.",
+  "version": "1.0.16",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -15,6 +15,9 @@
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
+    "openai",
+    "chatgpt",
     "anthropic",
     "quota",
     "rate-limit",
@@ -53,14 +56,61 @@
       {
         "command": "ccStatusbar.openPanel",
         "title": "%ccStatusbar.cmd.openPanel%"
+      },
+      {
+        "command": "ccStatusbar.selectProvider",
+        "title": "%ccStatusbar.cmd.selectProvider%"
+      },
+      {
+        "command": "ccStatusbar.useAuto",
+        "title": "%ccStatusbar.cmd.useAuto%"
+      },
+      {
+        "command": "ccStatusbar.useClaude",
+        "title": "%ccStatusbar.cmd.useClaude%"
+      },
+      {
+        "command": "ccStatusbar.useCodex",
+        "title": "%ccStatusbar.cmd.useCodex%"
+      },
+      {
+        "command": "ccStatusbar.useLanguageAuto",
+        "title": "%ccStatusbar.cmd.useLanguageAuto%"
+      },
+      {
+        "command": "ccStatusbar.useLanguageEn",
+        "title": "%ccStatusbar.cmd.useLanguageEn%"
+      },
+      {
+        "command": "ccStatusbar.useLanguageRu",
+        "title": "%ccStatusbar.cmd.useLanguageRu%"
       }
     ],
     "configuration": {
-      "title": "Claude Code Usage — Quota & Context Statusbar",
+      "title": "Claude/Codex Usage — Quota & Context Statusbar",
       "properties": {
+        "ccStatusbar.provider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "claude",
+            "codex"
+          ],
+          "default": "auto",
+          "description": "%ccStatusbar.cfg.provider%",
+          "enumDescriptions": [
+            "%ccStatusbar.cfg.provider.auto%",
+            "%ccStatusbar.cfg.provider.claude%",
+            "%ccStatusbar.cfg.provider.codex%"
+          ]
+        },
         "ccStatusbar.language": {
           "type": "string",
-          "enum": ["auto", "en", "ru"],
+          "enum": [
+            "auto",
+            "en",
+            "ru"
+          ],
           "default": "auto",
           "description": "%ccStatusbar.cfg.language%",
           "enumDescriptions": [
@@ -82,40 +132,48 @@
         },
         "ccStatusbar.alignment": {
           "type": "string",
-          "enum": ["left", "right"],
+          "enum": [
+            "left",
+            "right"
+          ],
           "default": "right",
           "description": "Status bar side."
         },
         "ccStatusbar.cacheReadWeight": {
           "type": "number",
           "default": 0.1,
-          "description": "Weight of cache-read tokens in the `effective` metric (cache read ≈ 10% of a fresh input token). Keep in sync with tools/session-cost.py."
+          "description": "Weight of cache-read tokens in the token-equivalent metric (cache read ≈ 10% of a fresh input token). Keep in sync with tools/session-cost.py."
         },
         "ccStatusbar.cacheWriteWeight": {
           "type": "number",
           "default": 1.25,
-          "description": "Weight of cache-write tokens in the `effective` metric (cache write ≈ 125%). Keep in sync with tools/session-cost.py."
+          "description": "Weight of cache-write tokens in the token-equivalent metric (cache write ≈ 125%). Keep in sync with tools/session-cost.py."
         },
         "ccStatusbar.quota.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Fetch REAL 5h/7d subscription quota from Anthropic (costs ~1 token per poll, only while active). Turn off to keep only free transcript-based metrics."
+          "description": "Claude Code: fetch real 5h/7d subscription quota from Anthropic (costs ~1 token per poll, only while active). Turn off to keep only local transcript metrics."
         },
         "ccStatusbar.quota.minPollSeconds": {
           "type": "number",
           "default": 300,
           "minimum": 60,
-          "description": "Minimum seconds between quota API calls (throttle to avoid rate-limit 429). Polls only when the session was recently active."
+          "description": "Claude Code/Codex: minimum seconds between quota API calls (throttle to avoid rate-limit 429). Claude polling runs only while the session was recently active."
         },
         "ccStatusbar.credentialsPath": {
           "type": "string",
           "default": "",
           "description": "Override path to Claude credentials JSON (default: ~/.claude/.credentials.json)."
         },
+        "ccStatusbar.codex.commandPath": {
+          "type": "string",
+          "default": "",
+          "description": "%ccStatusbar.cfg.codex.commandPath%"
+        },
         "ccStatusbar.context.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show how full the model's context window is right now (current input ÷ the model's max_input_tokens). The window limit is fetched once per model from the Anthropic Models API using the same local token as the quota feature and cached 24h; if it can't be fetched the % is hidden (never guessed). Turn off to skip this lookup entirely."
+          "description": "Claude Code: show how full the model's context window is right now (current input ÷ the model's max_input_tokens). The window limit is fetched once per model from the Anthropic Models API using the same local token as the quota feature and cached 24h; if it can't be fetched the % is hidden (never guessed)."
         }
       }
     }

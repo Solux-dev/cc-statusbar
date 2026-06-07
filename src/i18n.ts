@@ -31,6 +31,44 @@ export type QuotaState = "ok" | "no-credentials" | "error" | "rate-limited" | "d
 
 export interface Messages {
   units: TimeUnits;
+  providerNames: Record<"auto" | "claude" | "codex", string>;
+  providerDescriptions: Record<"auto" | "claude" | "codex", string>;
+  providerSelectPlaceholder: string;
+  providerSet: (provider: string) => string;
+  providerTooltipLine: (mode: string, active: string) => string;
+  languageChoicesHeader: string;
+  languageNames: Record<"auto" | "ru" | "en", string>;
+  providerUnavailableText: (provider: string) => string;
+  providerUnavailableTooltip: (provider: string, detail: string) => string;
+  providerConflictText: string;
+  providerConflictTooltip: string;
+  chooseProvider: string;
+  useClaude: string;
+  codexTitle: string;
+  codexQuotaHeader: string;
+  codexAppServerLine: (source: string, plan: string | null, userAgent: string | null) => string;
+  codexCostCompact: (withCache: string, noCache: string, mult: string) => string;
+  codexUsageWaitingCompact: string;
+  codexContextShortUnavailable: string;
+  codexContextWaitingLine: string;
+  codexContextWaitingPanel: string;
+  codexPanelTitle: string;
+  codexPanelCostLabel: string;
+  codexPanelNoCacheLabel: string;
+  codexPanelSavedLabel: string;
+  codexLowerMult: (mult: string) => string;
+  codexPanelUsageWaiting: string;
+  codexPanelTokenCostNote: string;
+  codexPanelQuotaHeader: string;
+  codexPanelContextHeader: string;
+  codexPanelCacheHeader: string;
+  codexCacheWaitingLine: string;
+  codexCacheWaitingPanel: string;
+  codexCacheHitLine: (pct: string) => string;
+  codexCacheTierUnavailable: string;
+  codexDetailsLine: (work: string, cacheRead: string) => string;
+  codexDetailsWaitingLine: string;
+  diagnosticsHeader: string;
   // status-bar (collapsed)
   noFolder: string;
   noFolderTip: string;
@@ -40,7 +78,7 @@ export interface Messages {
   ctxShort: string; // collapsed-bar context label "ctx" / "конт"
   // tooltip
   title: string;
-  // cost-first headline: one compact line (with caching · without · ×cheaper)
+  // token-equivalent headline: one compact line (with cache · without · ×lower)
   costCompact: (withCache: string, noCache: string, mult: string) => string;
   // muted technical breakdown (tooltip + panel "Details")
   detailsLine: (work: string, cacheRead: string, cacheWrite: string) => string;
@@ -60,10 +98,11 @@ export interface Messages {
   panelTitle: string; // webview panel tab title
   // webview panel (plain text — HTML provides the styling)
   tok: string;
-  panelCostLabel: string; // "This session cost" / "Стоило (с учётом кэша)"
-  panelNoCacheLabel: string; // "Without caching" / "Без кэша было бы"
-  panelSavedLabel: string; // "💰 Cache saved" / "💰 Экономия за счёт кэша"
-  cheaperMult: (mult: string) => string; // "(~6.8× cheaper)" / "(в ~6.8× дешевле)"
+  panelCostLabel: string; // "Token-equivalent with cache" / "Токен-эквивалент с кэшем"
+  panelNoCacheLabel: string; // "Without cache" / "Без кэша было бы"
+  panelSavedLabel: string; // "Cache saved" / "Сэкономлено кэшем"
+  lowerMult: (mult: string) => string; // "(~6.8× lower)" / "(в ~6.8× меньше)"
+  panelTokenCostNote: string;
   panelDetailsHeader: string; // "Details" / "Детали"
   panelQuotaHeader: string;
   panelLocalAccurate: string;
@@ -80,6 +119,54 @@ export interface Messages {
 
 const EN: Messages = {
   units: { d: "d", h: "h", m: "m" },
+  providerNames: { auto: "Auto", claude: "Claude Code", codex: "Codex" },
+  providerDescriptions: {
+    auto: "Choose the active source for this workspace",
+    claude: "Use the existing Claude Code transcript and quota path",
+    codex: "Use Codex usage, quota, context, and cache data",
+  },
+  providerSelectPlaceholder: "Usage provider",
+  providerSet: (provider) => `Provider: ${provider}`,
+  providerTooltipLine: (mode, active) => `provider: ${mode} · showing ${active}`,
+  languageChoicesHeader: "Language",
+  languageNames: { auto: "Auto", ru: "RU", en: "EN" },
+  providerUnavailableText: (provider) => `$(warning) ${provider}: n/a`,
+  providerUnavailableTooltip: (provider, detail) =>
+    `**${provider} unavailable**\n\n${detail}\n\n[Choose provider](command:ccStatusbar.selectProvider) · [Use Claude Code](command:ccStatusbar.useClaude)`,
+  providerConflictText: "$(warning) LLM: choose source",
+  providerConflictTooltip:
+    "**Choose usage source**\n\nActive Claude Code and Codex sessions were both detected for this workspace.\n\n[Choose provider](command:ccStatusbar.selectProvider)",
+  chooseProvider: "Choose provider",
+  useClaude: "Use Claude Code",
+  codexTitle: "**Codex — session usage**",
+  codexQuotaHeader: "**Subscription quota (real, from server):**",
+  codexAppServerLine: (source, plan, userAgent) =>
+    `app-server: ${source}${plan ? ` · plan ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
+  codexCostCompact: (withCache, noCache, mult) =>
+    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
+  codexUsageWaitingCompact: "token-equivalent with cache: will appear after the next Codex response",
+  codexContextShortUnavailable: "$(info) ctx n/a",
+  codexContextWaitingLine: "context: waiting for the next Codex response",
+  codexContextWaitingPanel:
+    "Context will appear after the next Codex response. Codex does not expose this number for older history yet.",
+  codexPanelTitle: "Codex — Session Usage",
+  codexPanelCostLabel: "Token-equivalent with cache",
+  codexPanelNoCacheLabel: "Without cache",
+  codexPanelSavedLabel: "Cache saved",
+  codexLowerMult: (mult) => `(~${mult}× lower)`,
+  codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
+  codexPanelTokenCostNote:
+    "Calculated from real local token counters. The cache multiplier is this extension's token-equivalent estimate, not a money price.",
+  codexPanelQuotaHeader: "Subscription quota (real, from server)",
+  codexPanelContextHeader: "Context",
+  codexPanelCacheHeader: "Cache",
+  codexCacheWaitingLine: "cache: waiting for the next Codex response",
+  codexCacheWaitingPanel: "Cache usage will appear after the next Codex response.",
+  codexCacheHitLine: (pct) => `input from cache: ${pct}`,
+  codexCacheTierUnavailable: "n/a",
+  codexDetailsLine: (work, cacheRead) => `work (input+output) ${work} · cache: read ${cacheRead} / write n/a`,
+  codexDetailsWaitingLine: "Token details will appear after the next Codex response.",
+  diagnosticsHeader: "**Diagnostics:**",
   noFolder: "$(pulse) cc: no folder",
   noFolderTip: "Open a project folder to track its Claude Code session.",
   effShort: "eff",
@@ -88,7 +175,7 @@ const EN: Messages = {
   ctxShort: "ctx",
   title: "**Claude Code — session usage**",
   costCompact: (withCache, noCache, mult) =>
-    `with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× cheaper)`,
+    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
   detailsLine: (work, cacheRead, cacheWrite) =>
     `work (in+out) ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
   contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
@@ -108,19 +195,23 @@ const EN: Messages = {
     "rate-limited": "temporary request limit — will retry later",
     error: "temporarily unavailable (request failed)",
   },
-  localAlwaysAccurate: "_The numbers above come from the local transcript — always accurate._",
+  localAlwaysAccurate:
+    "_Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights._",
   legend: "_Dot color: 🟢 on track · 🟡 running tight · 🔴 over pace. Click the item to refresh._",
   switchLang: "🌐 Change language",
   openPanel: "⤢ Open panel",
   panelTitle: "Claude Code — Session Usage",
   tok: "tok",
-  panelCostLabel: "This session cost",
-  panelNoCacheLabel: "Without caching",
-  panelSavedLabel: "💰 Cache saved",
-  cheaperMult: (mult) => `(~${mult}× cheaper)`,
+  panelCostLabel: "Token-equivalent with cache",
+  panelNoCacheLabel: "Without cache",
+  panelSavedLabel: "Cache saved",
+  lowerMult: (mult) => `(~${mult}× lower)`,
+  panelTokenCostNote:
+    "Calculated from real local token counters. The cache multiplier is this extension's token-equivalent estimate, not a money price.",
   panelDetailsHeader: "Details",
   panelQuotaHeader: "Subscription quota (real, from server)",
-  panelLocalAccurate: "The numbers above come from the local transcript — always accurate.",
+  panelLocalAccurate:
+    "Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights.",
   panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
   cacheTierLine: (tier) =>
     tier === "1h"
@@ -143,6 +234,54 @@ const EN: Messages = {
 
 const RU: Messages = {
   units: { d: "д", h: "ч", m: "м" },
+  providerNames: { auto: "Авто", claude: "Claude Code", codex: "Codex" },
+  providerDescriptions: {
+    auto: "Выбирать активный источник для этой рабочей папки",
+    claude: "Использовать текущий путь Claude Code: транскрипт и тариф",
+    codex: "Использовать данные Codex: расход, тариф, контекст и кэш",
+  },
+  providerSelectPlaceholder: "Провайдер расхода",
+  providerSet: (provider) => `Провайдер: ${provider}`,
+  providerTooltipLine: (mode, active) => `провайдер: ${mode} · показан ${active}`,
+  languageChoicesHeader: "Язык",
+  languageNames: { auto: "Авто", ru: "RU", en: "EN" },
+  providerUnavailableText: (provider) => `$(warning) ${provider}: н/д`,
+  providerUnavailableTooltip: (provider, detail) =>
+    `**${provider} недоступен**\n\n${detail}\n\n[Выбрать провайдера](command:ccStatusbar.selectProvider) · [Claude Code](command:ccStatusbar.useClaude)`,
+  providerConflictText: "$(warning) LLM: выберите источник",
+  providerConflictTooltip:
+    "**Выберите источник расхода**\n\nДля этой рабочей папки обнаружены активные сессии Claude Code и Codex.\n\n[Выбрать провайдера](command:ccStatusbar.selectProvider)",
+  chooseProvider: "Выбрать провайдера",
+  useClaude: "Claude Code",
+  codexTitle: "**Codex — расход сессии**",
+  codexQuotaHeader: "**Тариф (реальный, с сервера):**",
+  codexAppServerLine: (source, plan, userAgent) =>
+    `app-server: ${source}${plan ? ` · план ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
+  codexCostCompact: (withCache, noCache, mult) =>
+    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
+  codexUsageWaitingCompact: "токен-эквивалент с кэшем: появится после следующего ответа Codex",
+  codexContextShortUnavailable: "$(info) конт н/д",
+  codexContextWaitingLine: "контекст: появится после следующего ответа Codex",
+  codexContextWaitingPanel:
+    "Контекст появится после следующего ответа Codex. Для старой истории Codex пока не отдаёт это число.",
+  codexPanelTitle: "Codex — расход сессии",
+  codexPanelCostLabel: "Токен-эквивалент с кэшем",
+  codexPanelNoCacheLabel: "Без кэша было бы",
+  codexPanelSavedLabel: "Сэкономлено кэшем",
+  codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
+  codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
+  codexPanelTokenCostNote:
+    "Рассчитано из реальных локальных счётчиков токенов. Коэффициент кэша — токен-эквивалент расширения, не денежная цена.",
+  codexPanelQuotaHeader: "Тариф (реальный, с сервера)",
+  codexPanelContextHeader: "Контекст",
+  codexPanelCacheHeader: "Кэш",
+  codexCacheWaitingLine: "кэш: появится после следующего ответа Codex",
+  codexCacheWaitingPanel: "Данные по кэшу появятся после следующего ответа Codex.",
+  codexCacheHitLine: (pct) => `ввод из кэша: ${pct}`,
+  codexCacheTierUnavailable: "н/д",
+  codexDetailsLine: (work, cacheRead) => `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись н/д`,
+  codexDetailsWaitingLine: "Детали по токенам появятся после следующего ответа Codex.",
+  diagnosticsHeader: "**Диагностика:**",
   noFolder: "$(pulse) cc: нет папки",
   noFolderTip: "Откройте папку проекта, чтобы отслеживать его сессию Claude Code.",
   effShort: "эфф",
@@ -151,7 +290,7 @@ const RU: Messages = {
   ctxShort: "конт",
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult) =>
-    `с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (дешевле в ~${mult}×)`,
+    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
   detailsLine: (work, cacheRead, cacheWrite) =>
     `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
   contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
@@ -171,19 +310,23 @@ const RU: Messages = {
     "rate-limited": "временный лимит запросов — повтор позже",
     error: "временно недоступен (запрос не прошёл)",
   },
-  localAlwaysAccurate: "_Числа выше — из локального транскрипта, всегда точны._",
+  localAlwaysAccurate:
+    "_Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения._",
   legend: "_Цвет точки: 🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы. Клик по строке — обновить._",
   switchLang: "🌐 Сменить язык",
   openPanel: "⤢ Открыть панель",
   panelTitle: "Claude Code — расход сессии",
   tok: "ток",
-  panelCostLabel: "Стоило (с учётом кэша)",
+  panelCostLabel: "Токен-эквивалент с кэшем",
   panelNoCacheLabel: "Без кэша было бы",
-  panelSavedLabel: "💰 Экономия за счёт кэша",
-  cheaperMult: (mult) => `(в ~${mult}× дешевле)`,
+  panelSavedLabel: "Сэкономлено кэшем",
+  lowerMult: (mult) => `(в ~${mult}× меньше)`,
+  panelTokenCostNote:
+    "Рассчитано из реальных локальных счётчиков токенов. Коэффициент кэша — токен-эквивалент расширения, не денежная цена.",
   panelDetailsHeader: "Детали",
   panelQuotaHeader: "Тариф (реальный, с сервера)",
-  panelLocalAccurate: "Числа выше — из локального транскрипта, всегда точны.",
+  panelLocalAccurate:
+    "Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения.",
   panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",
   cacheTierLine: (tier) =>
     tier === "1h"

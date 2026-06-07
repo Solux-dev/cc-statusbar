@@ -57,6 +57,38 @@ export interface View {
   level: PaceLevel;
 }
 
+export interface CodexQuotaDetails {
+  source: "proxy" | "stdio" | null;
+  planType?: string | null;
+  userAgent?: string | null;
+  thread?: {
+    id: string;
+    name: string | null;
+    preview: string | null;
+    cwd: string | null;
+    updatedAtSec: number | null;
+    status: string | null;
+    source: string | null;
+    modelProvider: string | null;
+    cliVersion: string | null;
+    loaded: boolean;
+  } | null;
+  context?: ContextView;
+  contextState?: "waiting" | "unavailable";
+  cache?: CacheView;
+  cacheState?: "waiting" | "unavailable";
+  weights?: Weights;
+  usage?: {
+    totalTokens: number;
+    lastTokens: number;
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+  } | null;
+  diagnostics?: string[];
+}
+
 /** Context % when both numbers are known, else null (fail-visibly). */
 function contextPct(ctx?: ContextView): number | null {
   if (!ctx || ctx.usedTokens == null || ctx.limitTokens == null || ctx.limitTokens <= 0) return null;
@@ -81,6 +113,51 @@ function contextLine(ctx: ContextView | undefined, m: Messages): string | null {
   if (pct != null) return m.contextLine(fmtTokens(ctx.usedTokens), fmtTokens(ctx.limitTokens!), pct);
   if (ctx.limitState === "unavailable") return m.contextNoLimit(fmtTokens(ctx.usedTokens), ctx.limitDetail);
   return null; // pending → show nothing yet
+}
+
+function codexContextLine(details: CodexQuotaDetails, m: Messages): string | null {
+  const cl = contextLine(details.context, m);
+  if (cl) return cl;
+  if (details.contextState === "waiting") return m.codexContextWaitingLine;
+  return null;
+}
+
+function codexCacheLine(details: CodexQuotaDetails, m: Messages): string | null {
+  if (details.cache?.hitRatePct != null) return m.codexCacheHitLine(`${details.cache.hitRatePct.toFixed(0)}%`);
+  if (details.cacheState === "waiting") return m.codexCacheWaitingLine;
+  return null;
+}
+
+function codexEconomy(details: CodexQuotaDetails): { effective: number; noCache: number; saved: number; mult: string; work: number } | null {
+  if (!details.usage) return null;
+  const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
+  const cachedInput = Math.max(0, details.usage.cachedInputTokens);
+  const freshInput = Math.max(0, details.usage.inputTokens - cachedInput);
+  // Codex total_tokens = input_tokens + output_tokens; reasoning is a detail of output.
+  const output = Math.max(0, details.usage.outputTokens);
+  const work = freshInput + output;
+  const effective = work + cachedInput * cacheReadWeight;
+  const noCache = details.usage.inputTokens + output;
+  const saved = Math.max(0, noCache - effective);
+  return {
+    effective,
+    noCache,
+    saved,
+    mult: effective > 0 ? fmtMult(noCache / effective) : "1",
+    work,
+  };
+}
+
+function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
+  const economy = codexEconomy(details);
+  if (!economy) return m.codexUsageWaitingCompact;
+  return m.codexCostCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache), economy.mult);
+}
+
+function codexDetailsLine(details: CodexQuotaDetails, m: Messages): string {
+  if (!details.usage) return m.codexDetailsWaitingLine;
+  const economy = codexEconomy(details);
+  return m.codexDetailsLine(fmtTokens(economy?.work ?? 0), fmtTokens(details.usage.cachedInputTokens));
 }
 
 function bar(pct: number, width = 8): string {
@@ -168,6 +245,66 @@ export function buildView(
   return { text, tooltip: t.join("\n"), level };
 }
 
+export function buildCodexQuotaView(
+  quota: QuotaView,
+  nowSec: number,
+  lang: Lang = "en",
+  details: CodexQuotaDetails = { source: null }
+): View {
+  const m = messages(lang);
+  const segs: string[] = [];
+  let level: PaceLevel = "normal";
+
+  const windowSeg = (label: string, w: QuotaWindow | null, windowSec: number): void => {
+    if (!w) return;
+    const p = paceLevel(w.pct, w.resetAt, nowSec, windowSec);
+    level = worstLevel(level, p);
+    const reset = w.resetAt ? ` (${fmtRemaining(w.resetAt - nowSec, m.units)})` : "";
+    segs.push(`${dot(p)} ${label} ${w.pct.toFixed(0)}%${reset}`);
+  };
+
+  if (quota.state === "ok") {
+    windowSeg(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
+    windowSeg(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
+  }
+
+  const ctxSeg = contextSegment(details.context, m) || (details.contextState === "waiting" ? m.codexContextShortUnavailable : null);
+  const text = segs.length
+    ? `Codex · ${segs.join(" · ")}${ctxSeg ? ` · ${ctxSeg}` : ""}`
+    : m.providerUnavailableText("Codex");
+  const t: string[] = [m.codexTitle, ""];
+  t.push(codexUsageCompact(details, m));
+  t.push("");
+
+  const quotaLine = (label: string, w: QuotaWindow | null, windowSec: number): string => {
+    if (!w) return `- ${label}: —`;
+    const p = paceLevel(w.pct, w.resetAt, nowSec, windowSec);
+    const reset = w.resetAt ? m.quotaReset(fmtRemaining(w.resetAt - nowSec, m.units)) : "";
+    return `- ${dot(p)} ${label} ${bar(w.pct)} **${w.pct.toFixed(0)}%** ${m.verdict[p]}${reset}`;
+  };
+
+  if (quota.state === "ok") {
+    t.push(m.codexQuotaHeader);
+    t.push(quotaLine(m.w5h, quota.fiveH, WINDOW_5H_SECONDS));
+    t.push(quotaLine(m.w7d, quota.sevenD, WINDOW_7D_SECONDS));
+  } else {
+    t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
+  }
+
+  const codexCtx = codexContextLine(details, m);
+  if (codexCtx) t.push(`- ${codexCtx}`);
+  const codexCache = codexCacheLine(details, m);
+  if (codexCache) t.push(`- ${codexCache}`);
+
+  t.push("");
+  t.push(`_${codexDetailsLine(details, m)}_`);
+  t.push("");
+  t.push(m.legend);
+  t.push("");
+  t.push(`[${m.openPanel}](command:ccStatusbar.openPanel)`);
+  return { text, tooltip: t.join("\n"), level: segs.length ? level : "tight" };
+}
+
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -194,7 +331,8 @@ export function buildPanelHtml(
   const rows: string[] = [];
   rows.push(`<div class="row big"><span>${esc(m.panelCostLabel)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
   rows.push(`<div class="row"><span>${esc(m.panelNoCacheLabel)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="row save"><span>${esc(m.panelSavedLabel)}</span><b>≈ ${fmtTokens(saved)} ${esc(m.tok)} <span class="mult">${esc(m.cheaperMult(mult))}</span></b></div>`);
+  rows.push(`<div class="row save"><span>${esc(m.panelSavedLabel)}</span><b>≈ ${fmtTokens(saved)} ${esc(m.tok)} <span class="mult">${esc(m.lowerMult(mult))}</span></b></div>`);
+  rows.push(`<div class="sub">${esc(m.panelTokenCostNote)}</div>`);
 
   const quotaBlock: string[] = [];
   const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
@@ -307,6 +445,125 @@ export function buildPanelHtml(
   ${cacheSection}
   ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
+</body>
+</html>`;
+}
+
+export function buildCodexPanelHtml(
+  quota: QuotaView,
+  nowSec: number,
+  lang: Lang = "en",
+  details: CodexQuotaDetails = { source: null }
+): string {
+  const m = messages(lang);
+  const economy = codexEconomy(details);
+
+  const usageRows: string[] = [];
+  if (economy) {
+    usageRows.push(
+      `<div class="row big"><span>${esc(m.codexPanelCostLabel)}</span><b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
+    );
+    usageRows.push(
+      `<div class="row"><span>${esc(m.codexPanelNoCacheLabel)}</span><b>≈ ${fmtTokens(economy.noCache)} ${esc(m.tok)}</b></div>`
+    );
+    usageRows.push(
+      `<div class="row save"><span>${esc(m.codexPanelSavedLabel)}</span><b>≈ ${fmtTokens(economy.saved)} ${esc(m.tok)} <span class="mult">${esc(m.codexLowerMult(economy.mult))}</span></b></div>`
+    );
+  } else {
+    usageRows.push(`<div class="row big"><span>${esc(m.codexPanelCostLabel)}</span><b>—</b></div>`);
+    usageRows.push(`<div class="row"><span>${esc(m.codexPanelNoCacheLabel)}</span><b>—</b></div>`);
+    usageRows.push(`<div class="row save"><span>${esc(m.codexPanelSavedLabel)}</span><b>—</b></div>`);
+    usageRows.push(`<div class="empty">${esc(m.codexPanelUsageWaiting)}</div>`);
+  }
+  usageRows.push(`<div class="sub">${esc(m.codexPanelTokenCostNote)}</div>`);
+
+  const quotaRows: string[] = [];
+  const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
+    if (!w) {
+      quotaRows.push(`<div class="qrow"><span class="qlabel">${esc(label)}</span><span class="muted">—</span></div>`);
+      return;
+    }
+    const lvl = paceLevel(w.pct, w.resetAt, nowSec, windowSec);
+    const color = lvl === "over" ? "var(--cc-red)" : lvl === "tight" ? "var(--cc-yellow)" : "var(--cc-green)";
+    const pct = Math.max(0, Math.min(100, w.pct));
+    const reset = w.resetAt ? esc(m.quotaReset(fmtRemaining(w.resetAt - nowSec, m.units))) : "";
+    quotaRows.push(
+      `<div class="qrow">` +
+        `<span class="dot" style="background:${color}"></span>` +
+        `<span class="qlabel">${esc(label)}</span>` +
+        `<span class="bar"><i style="width:${pct.toFixed(0)}%;background:${color}"></i></span>` +
+        `<b>${w.pct.toFixed(0)}%</b>` +
+        `<span class="verdict">${esc(m.verdict[lvl])}${reset}</span>` +
+        `</div>`
+    );
+  };
+
+  let quotaSection: string;
+  if (quota.state === "ok") {
+    windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
+    windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
+    quotaSection = `<h3>${esc(m.codexPanelQuotaHeader)}</h3>${quotaRows.join("")}`;
+  } else {
+    quotaSection = `<h3>${esc(m.codexPanelQuotaHeader)}</h3><div class="empty">${esc(m.quotaStateMsg[quota.state])}</div>`;
+  }
+
+  const ctxLine = codexContextLine(details, m);
+  const contextSection = `<div class="ctxrow">${esc(ctxLine || m.codexContextWaitingPanel)}</div>`;
+
+  const cacheLine = codexCacheLine(details, m);
+  const cacheRows: string[] = [];
+  cacheRows.push(`<div class="row"><span>${esc(m.panelCacheTierLabel)}</span><b>${esc(m.codexCacheTierUnavailable)}</b></div>`);
+  if (details.cache?.hitRatePct != null) {
+    cacheRows.push(`<div class="row"><span>${esc(m.panelCacheHitLabel)}</span><b>${details.cache.hitRatePct.toFixed(0)}%</b></div>`);
+  } else {
+    cacheRows.push(`<div class="row"><span>${esc(m.panelCacheHitLabel)}</span><b class="soft">—</b></div>`);
+    cacheRows.push(`<div class="sub">${esc(details.cacheState === "waiting" ? m.codexCacheWaitingPanel : cacheLine || m.codexCacheWaitingPanel)}</div>`);
+  }
+  const cacheSection = `<h3>${esc(m.codexPanelCacheHeader)}</h3>${cacheRows.join("")}`;
+
+  const detailsSection =
+    `<h3>${esc(m.panelDetailsHeader)}</h3>` +
+    `<div class="sub">${esc(codexDetailsLine(details, m))}</div>`;
+
+  return `<!DOCTYPE html>
+<html lang="${lang}">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+<style>
+  :root { --cc-green:#3fb950; --cc-yellow:#d6a31a; --cc-red:#e5534b; }
+  body { font-family: var(--vscode-font-family); color: var(--vscode-foreground);
+         padding: 14px 18px; font-size: 13px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  h3 { font-size: 13px; margin: 18px 0 8px; opacity: .88; }
+  .row { display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:3px 0; }
+  .row span { opacity:.9; min-width:0; overflow-wrap:anywhere; }
+  .row b { font-variant-numeric: tabular-nums; white-space:nowrap; }
+  .row.big b { font-size: 16px; }
+  .row.save b { color: var(--cc-green); }
+  .row.save .mult { opacity:.8; font-weight:normal; font-size:12px; }
+  .row .soft, .soft { opacity:.7; font-weight:600; }
+  .sub { opacity:.6; font-size:12px; line-height:1.45; padding:2px 0 6px; }
+  .ctxrow { padding:6px 0 2px; opacity:.85; font-variant-numeric: tabular-nums; }
+  .empty { opacity:.7; font-size:12px; line-height:1.5; padding:6px 0 2px; max-width:720px; }
+  .qrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  .qrow.ctx { padding-bottom:2px; }
+  .dot { width:10px; height:10px; border-radius:50%; flex:0 0 auto; }
+  .qlabel { width:28px; opacity:.85; }
+  .bar { flex:1; height:8px; border-radius:4px; background:var(--vscode-input-background,rgba(255,255,255,.08)); overflow:hidden; min-width:120px; }
+  .bar i { display:block; height:100%; }
+  .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
+  .verdict { opacity:.7; font-size:12px; }
+  .muted { opacity:.55; }
+</style>
+</head>
+<body>
+  <h2>${esc(m.codexPanelTitle)}</h2>
+  ${usageRows.join("\n  ")}
+  ${quotaSection}
+  ${contextSection}
+  ${cacheSection}
+  ${detailsSection}
 </body>
 </html>`;
 }

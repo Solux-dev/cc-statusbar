@@ -3,6 +3,40 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.16] — 2026-06-08
+
+### Added
+
+- **Codex provider support.** The status bar can now show Codex 5h/7d quota,
+  context, cached-input usage, and token-equivalent details from the local Codex
+  app-server and Codex session history.
+- **Provider and language controls in the hover.** Switch between `Auto`,
+  `Claude Code`, and `Codex`, plus `Auto` / `RU` / `EN`, without opening VS Code
+  Settings.
+- **Codex panel view.** Codex uses the same information layout as Claude Code:
+  token-equivalent, quota, context, cache, and details. Metrics Codex does not
+  expose, such as cache tier and cache write, are shown as unavailable instead of
+  guessed.
+
+### Changed
+
+- Renamed the extension display name to **Claude/Codex Usage — Quota & Context
+  Statusbar** while keeping the same extension ID (`solux-dev.cc-statusbar`).
+- Renamed the cache headline for both Claude Code and Codex to
+  **token-equivalent**. Raw token counters are real local data; cache savings use
+  the extension's configured cache weights and are not presented as billing.
+- Hid technical Codex app-server/socket diagnostics from the user-facing
+  hover/panel. Diagnostics are logged to the VS Code output channel and extension
+  log instead.
+
+### Fixed
+
+- Codex context and cache now read from local Codex `token_count` history when
+  available, so long-running Codex sessions show context/cache after a response
+  instead of staying at `n/a`.
+- Added regression coverage for workspace paths with spaces, dashes, underscores,
+  and dots.
+
 ## [1.0.4] — 2026-06-02
 
 ### Fixed
