@@ -58,9 +58,18 @@ export function effectiveTokens(t: Totals, w: Weights): number {
 }
 
 /** Sum usage from one transcript's lines (raw jsonl text). Mirrors
- *  session-cost.py parse_session: only assistant messages with a usage block. */
+ *  session-cost.py parse_session: only assistant messages with a usage block.
+ *
+ *  One API response (one `message.id` / `requestId`) is serialized across
+ *  MULTIPLE jsonl lines — one per content block (thinking / text / each
+ *  tool_use) — and EACH line repeats the SAME `usage` block verbatim. Summing
+ *  per line counts a single response 2–4× and inflates every absolute token
+ *  number ~2.3–3.3×. Dedup by response id so each response is counted once.
+ *  (Lines with neither id — very old/odd transcripts — fall through and are
+ *  counted, as before, to avoid silently dropping data.) */
 export function sumTranscript(raw: string): Totals {
   const t = emptyTotals();
+  const seen = new Set<string>();
   for (const line of raw.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -72,6 +81,11 @@ export function sumTranscript(raw: string): Totals {
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
     if (obj.isSidechain) continue; // subagent turn — counted via its own agent-*.jsonl, not here
+    const id = obj.message.id || obj.requestId;
+    if (id) {
+      if (seen.has(id)) continue; // same response, another content-block line — already counted
+      seen.add(id);
+    }
     const u = obj.message.usage || {};
     t.input += u.input_tokens || 0;
     t.output += u.output_tokens || 0;

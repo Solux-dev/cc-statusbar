@@ -82,6 +82,55 @@ test("sumTranscript: excludes subagent (isSidechain) turns from main totals", ()
   assert.equal(t.cacheWrite, 200);
 });
 
+test("sumTranscript: counts one response once when split across content-block lines (same message.id)", () => {
+  // One API response → 3 jsonl lines (thinking / text / tool_use), each repeating the SAME usage.
+  const usage = { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 };
+  const raw = [
+    JSON.stringify({ type: "assistant", uuid: "a", message: { id: "msg_1", usage } }),
+    JSON.stringify({ type: "assistant", uuid: "b", message: { id: "msg_1", usage } }),
+    JSON.stringify({ type: "assistant", uuid: "c", message: { id: "msg_1", usage } }),
+  ].join("\n");
+  const t = sumTranscript(raw);
+  assert.equal(t.input, 100); // counted once, not ×3
+  assert.equal(t.output, 50);
+  assert.equal(t.work, 150);
+  assert.equal(t.cacheRead, 1000);
+  assert.equal(t.cacheWrite, 200);
+});
+
+test("sumTranscript: distinct message.id responses are all summed (no over-dedup)", () => {
+  const raw = [
+    JSON.stringify({ type: "assistant", message: { id: "msg_1", usage: { input_tokens: 100, output_tokens: 50 } } }),
+    JSON.stringify({ type: "assistant", message: { id: "msg_2", usage: { input_tokens: 10, output_tokens: 5 } } }),
+  ].join("\n");
+  const t = sumTranscript(raw);
+  assert.equal(t.input, 110);
+  assert.equal(t.output, 55);
+  assert.equal(t.work, 165);
+});
+
+test("sumTranscript: dedups by requestId when message.id is absent", () => {
+  const usage = { input_tokens: 100, output_tokens: 50 };
+  const raw = [
+    JSON.stringify({ type: "assistant", requestId: "req_1", message: { usage } }),
+    JSON.stringify({ type: "assistant", requestId: "req_1", message: { usage } }),
+  ].join("\n");
+  const t = sumTranscript(raw);
+  assert.equal(t.input, 100); // counted once
+  assert.equal(t.output, 50);
+});
+
+test("sumTranscript: lines with neither id are all counted (no silent drop)", () => {
+  const usage = { input_tokens: 100, output_tokens: 50 };
+  const raw = [
+    JSON.stringify({ type: "assistant", message: { usage } }),
+    JSON.stringify({ type: "assistant", message: { usage } }),
+  ].join("\n");
+  const t = sumTranscript(raw);
+  assert.equal(t.input, 200); // both kept — no id to dedup on
+  assert.equal(t.output, 100);
+});
+
 test("lastAssistantContext: a trailing subagent turn must NOT become the main context", () => {
   const raw = [
     JSON.stringify({ type: "assistant", message: { model: "claude-opus-4-8", usage: { input_tokens: 200, cache_read_input_tokens: 468000, cache_creation_input_tokens: 0 } } }),
