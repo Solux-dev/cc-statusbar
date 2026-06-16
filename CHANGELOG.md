@@ -3,6 +3,26 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.17] — 2026-06-16
+
+> **Heads-up: your token numbers will look lower after this update — that is the
+> fix, not a regression.** Your actual usage did not change. Earlier versions
+> were over-counting, so the bar was showing inflated figures. It now shows the
+> real numbers.
+
+### Fixed
+
+- **Token counts were inflated ~2.3–3.3×.** Claude Code writes a single model
+  reply to its log as several lines (one per part of the answer — reasoning,
+  text, each tool call) and repeats the same usage figures on every line. The
+  extension was adding those up per line, so one reply was counted 2–4 times.
+  This inflated every absolute number: work tokens, cache read/write,
+  token-equivalent, and the "N× cheaper" savings. We now count each reply once
+  (deduplicated by its response id). The numbers will drop to their true values.
+
+  Unaffected and unchanged: cache hit-rate (%), context-window fill (%), cache
+  tier (1h/5m), and the 5h/7d quota bars — those were already correct.
+
 ## [1.0.16] — 2026-06-08
 
 ### Added
