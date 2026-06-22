@@ -205,7 +205,17 @@ export function buildView(
   // drive the item background (that stays tariff-pace, two different models).
   const ctxSeg = contextSegment(context, m);
   // fallback when tariff unavailable: show effective so the bar is never empty.
-  const tariffText = segs.length ? segs.join(" · ") : `$(pulse) ${m.effShort} ${fmtTokens(eff)}`;
+  const effFallback = `$(pulse) ${m.effShort} ${fmtTokens(eff)}`;
+  // When the quota could not be fetched (network down, no token, throttled) the
+  // % is absent — but instead of silently dropping to the bare token-equivalent
+  // (which reads as "the limits vanished"), prefix a marker naming WHY and keep
+  // the local data visible beside it. "disabled" is an intentional user choice,
+  // not a failure → no marker there.
+  const tariffText = segs.length
+    ? segs.join(" · ")
+    : quota.state !== "ok" && quota.state !== "disabled"
+    ? `${m.quotaOfflineShort[quota.state]} · ${effFallback}`
+    : effFallback;
   const text = ctxSeg ? `${tariffText} · ${ctxSeg}` : tariffText;
 
   // ── rich tooltip: cost-first headline, then tariff + context, then details ──

@@ -91,6 +91,11 @@ export interface Messages {
   verdict: Record<PaceLevel, string>;
   quotaUnavail: (msg: string) => string;
   quotaStateMsg: Record<Exclude<QuotaState, "ok">, string>;
+  // collapsed-bar marker shown when the 5h/7d quota could NOT be fetched
+  // (not "ok"/"disabled"): names WHY, then the local token-equivalent stays
+  // visible beside it — so a connectivity blip reads as "offline, local data
+  // shown", never as a silent disappearance of the %.
+  quotaOfflineShort: Record<Exclude<QuotaState, "ok" | "disabled">, string>;
   localAlwaysAccurate: string;
   legend: string;
   switchLang: string; // tooltip link label → ccStatusbar.switchLanguage
@@ -194,6 +199,11 @@ const EN: Messages = {
     "no-credentials": "no token found at `~/.claude/.credentials.json`",
     "rate-limited": "temporary request limit — will retry later",
     error: "temporarily unavailable (request failed)",
+  },
+  quotaOfflineShort: {
+    "no-credentials": "$(warning) no token",
+    "rate-limited": "$(clock) quota paused",
+    error: "$(cloud-offline) quota offline",
   },
   localAlwaysAccurate:
     "_Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights._",
@@ -309,6 +319,11 @@ const RU: Messages = {
     "no-credentials": "не найден токен `~/.claude/.credentials.json`",
     "rate-limited": "временный лимит запросов — повтор позже",
     error: "временно недоступен (запрос не прошёл)",
+  },
+  quotaOfflineShort: {
+    "no-credentials": "$(warning) нет токена",
+    "rate-limited": "$(clock) лимиты: пауза",
+    error: "$(cloud-offline) лимиты офлайн",
   },
   localAlwaysAccurate:
     "_Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения._",

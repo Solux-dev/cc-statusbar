@@ -697,6 +697,33 @@ test("buildView (ru): disabled state falls back to эфф in bar", () => {
   assert.match(v.tooltip, /опрос выключен/);
 });
 
+test("buildView: quota fetch error → visible offline marker + local eff still shown (both langs)", () => {
+  const totals = { input: 5000, output: 8000, work: 13000, cacheRead: 0, cacheWrite: 0 };
+  const en = buildView(totals, W, { state: "error", fiveH: null, sevenD: null }, 1000, "en");
+  assert.match(en.text, /cloud-offline/); // marker icon present
+  assert.match(en.text, /quota offline/);
+  assert.match(en.text, /eff/); // local token-equivalent kept beside it — never blank
+  assert.equal(en.level, "normal"); // a connectivity blip must NOT tint the item
+  const ru = buildView(totals, W, { state: "error", fiveH: null, sevenD: null }, 1000, "ru");
+  assert.match(ru.text, /лимиты офлайн/);
+  assert.match(ru.text, /эфф/);
+});
+
+test("buildView: rate-limited and no-credentials get their own collapsed-bar markers", () => {
+  const totals = { input: 100, output: 100, work: 200, cacheRead: 0, cacheWrite: 0 };
+  const limited = buildView(totals, W, { state: "rate-limited", fiveH: null, sevenD: null }, 1000, "en");
+  assert.match(limited.text, /quota paused/);
+  const noCreds = buildView(totals, W, { state: "no-credentials", fiveH: null, sevenD: null }, 1000, "en");
+  assert.match(noCreds.text, /no token/);
+});
+
+test("buildView: disabled state stays silent (intentional off, no offline marker)", () => {
+  const totals = { input: 100, output: 100, work: 200, cacheRead: 0, cacheWrite: 0 };
+  const v = buildView(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
+  assert.doesNotMatch(v.text, /offline|paused|no token/);
+  assert.match(v.text, /eff/);
+});
+
 test("buildView: tooltip carries the switch-language command link (both langs)", () => {
   const totals = { input: 100, output: 100, work: 200, cacheRead: 0, cacheWrite: 0 };
   const en = buildView(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");

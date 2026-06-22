@@ -441,6 +441,13 @@ async function tick() {
             const retry = Number(r.detail) || 60;
             rateLimitedUntilSec = nowSec + Math.max(retry, conf.minPollSeconds);
           }
+          // Surface quota fetch failures in the diagnostics log (previously only
+          // Codex was logged) so a "limits stopped showing" report can be told
+          // apart from a real break — e.g. a slow/unstable link timing the
+          // request out shows up here as state: error.
+          if (r.state !== "ok") {
+            logDiagnostics("Claude quota", [`state: ${r.state}`, r.detail ? `detail: ${r.detail}` : ""]);
+          }
         })
         .finally(() => {
           inFlight = false;

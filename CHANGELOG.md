@@ -3,6 +3,25 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.18] — 2026-06-22
+
+### Added
+
+- **Visible "quota offline" marker.** When the 5h/7d limits can't be fetched
+  (no internet, a slow/unstable link timing the request out, a missing token, or
+  a temporary server throttle), the status bar used to silently drop the
+  percentages and show only the local token-equivalent — which read as "the
+  limits just vanished". It now shows a clear marker naming the reason
+  (`☁ quota offline` / `лимиты офлайн`, `quota paused`, `no token`) **next to**
+  the local data, so a connectivity blip is obvious and the bar is never blank.
+  An intentionally disabled quota poll stays silent (it's a choice, not a
+  failure). The marker never tints the item — a network blip isn't an over-pace
+  alarm.
+- **Quota failures are now written to the diagnostics log** (`CC Statusbar`
+  output channel + `cc-statusbar.log`). Previously only Codex errors were
+  logged, so a "limits stopped showing" report couldn't be told apart from a
+  real break without manual digging.
+
 ## [1.0.17] — 2026-06-16
 
 > **Heads-up: your token numbers will look lower after this update — that is the
