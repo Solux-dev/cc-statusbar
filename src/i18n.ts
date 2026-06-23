@@ -96,6 +96,11 @@ export interface Messages {
   // visible beside it — so a connectivity blip reads as "offline, local data
   // shown", never as a silent disappearance of the %.
   quotaOfflineShort: Record<Exclude<QuotaState, "ok" | "disabled">, string>;
+  // tooltip note when the shown quota is a last-known reading (e.g. fetched a
+  // while ago, or read from the local statusline bridge): "updated N ago".
+  quotaAsOf: (ago: string) => string;
+  // panel line for a non-live reading: "Last known: 5h 1%, 7d 10% (updated N ago)".
+  quotaLastKnown: (windows: string, ago: string) => string;
   localAlwaysAccurate: string;
   legend: string;
   switchLang: string; // tooltip link label → ccStatusbar.switchLanguage
@@ -205,6 +210,8 @@ const EN: Messages = {
     "rate-limited": "$(clock) quota paused",
     error: "$(cloud-offline) quota offline",
   },
+  quotaAsOf: (ago) => `_Updated ${ago} ago._`,
+  quotaLastKnown: (windows, ago) => `Last known: ${windows} (updated ${ago} ago)`,
   localAlwaysAccurate:
     "_Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights._",
   legend: "_Dot color: 🟢 on track · 🟡 running tight · 🔴 over pace. Click the item to refresh._",
@@ -325,6 +332,8 @@ const RU: Messages = {
     "rate-limited": "$(clock) лимиты: пауза",
     error: "$(cloud-offline) лимиты офлайн",
   },
+  quotaAsOf: (ago) => `_Обновлено ${ago} назад._`,
+  quotaLastKnown: (windows, ago) => `Последнее известное: ${windows} (обновлено ${ago} назад)`,
   localAlwaysAccurate:
     "_Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения._",
   legend: "_Цвет точки: 🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы. Клик по строке — обновить._",

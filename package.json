@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude/Codex Usage — Quota & Context Statusbar",
   "description": "See Claude Code and Codex quota, context, token-equivalent, and cache signals right in the VS Code status bar. Switch between Auto, Claude Code, and Codex from the hover menu.",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",

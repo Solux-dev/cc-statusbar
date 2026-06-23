@@ -269,3 +269,27 @@ export function parseRateLimitHeaders(
 
 export const WINDOW_5H_SECONDS = 5 * 3600;
 export const WINDOW_7D_SECONDS = 7 * 86400;
+
+/** Built-in, API-CONFIRMED context-window sizes (max_input_tokens) for current
+ *  Claude models — an OFFLINE fallback so the context % shows instantly even on
+ *  a link too weak to reach the Models API. The live API value always overrides
+ *  this once fetched (it is the per-account source of truth and covers future
+ *  models). Context is informational (no hard consequence), so a documented
+ *  fallback is acceptable here. Confirmed against /v1/models on 2026-06-22.
+ *  Prefix match so dated ids (e.g. …-20251001) resolve. */
+const KNOWN_MODEL_WINDOWS: Array<[string, number]> = [
+  ["claude-opus-4-8", 1_000_000],
+  ["claude-sonnet-4-6", 1_000_000],
+  ["claude-fable-5", 1_000_000],
+  ["claude-haiku-4-5", 200_000],
+];
+
+/** Best-effort context window for a model id from the built-in table, or null
+ *  when unknown (caller then relies on the live API / hides the %). Pure. */
+export function knownModelWindow(modelId: string | null | undefined): number | null {
+  if (!modelId) return null;
+  for (const [prefix, win] of KNOWN_MODEL_WINDOWS) {
+    if (modelId === prefix || modelId.startsWith(prefix)) return win;
+  }
+  return null;
+}

@@ -228,16 +228,29 @@ export async function fetchModelWindow(
 }
 
 /** Throttle gate: poll only if enough time passed AND the session was active
- *  recently (avoids the documented 429 bug + wasted tokens while idle). */
+ *  recently (avoids the documented 429 bug + wasted tokens while idle).
+ *
+ *  `throttleSec` is the minimum gap between polls — the caller shortens it after
+ *  a FAILED poll so a flaky link (where the request times out but recovers
+ *  seconds later) is retried in ~a minute instead of staying stale for the full
+ *  poll interval. `activityWindowSec` (defaults to throttleSec for backward
+ *  compatibility) is kept at the NORMAL interval so shortening the retry gap
+ *  does not also shrink the "is the user active?" window. */
 export function shouldPoll(
   lastFetchSec: number,
   nowSec: number,
-  minPollSeconds: number,
+  throttleSec: number,
   lastActivityMs: number,
-  rateLimitedUntilSec: number
+  rateLimitedUntilSec: number,
+  activityWindowSec: number = throttleSec
 ): boolean {
   if (nowSec < rateLimitedUntilSec) return false; // backing off after a 429
-  if (nowSec - lastFetchSec < minPollSeconds) return false;
-  const activeRecently = lastActivityMs > 0 && Date.now() - lastActivityMs < minPollSeconds * 1000;
+  if (nowSec - lastFetchSec < throttleSec) return false;
+  const activeRecently = lastActivityMs > 0 && Date.now() - lastActivityMs < activityWindowSec * 1000;
   return activeRecently;
 }
+
+/** Seconds to wait before retrying after a FAILED poll (timeout / network). Much
+ *  shorter than the normal interval so an intermittent link is caught quickly,
+ *  but long enough not to hammer a down link. */
+export const FAIL_RETRY_SEC = 45;

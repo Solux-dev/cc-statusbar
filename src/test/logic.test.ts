@@ -12,11 +12,13 @@ import {
   cacheHitRatePct,
   lastCacheTier,
   parseRateLimitHeaders,
+  knownModelWindow,
   WINDOW_5H_SECONDS,
 } from "../metrics";
 import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml } from "../render";
+import { parseLocalQuota, windowFromBridge } from "../localQuota";
 import { resolveLang, messages } from "../i18n";
-import { attemptTimeoutsMs, isRetryableStatus } from "../quota";
+import { attemptTimeoutsMs, isRetryableStatus, shouldPoll, FAIL_RETRY_SEC } from "../quota";
 import { projectSlug } from "../transcript";
 import { buildCodexSnapshot, codexContext, codexWindowLabel } from "../codexProvider";
 import { CODEX_NOT_CONNECTED_DETAIL, providerActivity, resolveProvider } from "../providerResolver";
@@ -722,6 +724,121 @@ test("buildView: disabled state stays silent (intentional off, no offline marker
   const v = buildView(totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "en");
   assert.doesNotMatch(v.text, /offline|paused|no token/);
   assert.match(v.text, /eff/);
+});
+
+test("localQuota: windowFromBridge maps used_percentage/resets_at → pct/resetAt", () => {
+  const w = windowFromBridge({ used_percentage: 12, resets_at: 1782122400, status: "allowed" });
+  assert.deepEqual(w, { pct: 12, resetAt: 1782122400, status: "allowed" });
+  // missing/invalid % → null (never guess)
+  assert.equal(windowFromBridge({ resets_at: 1 }), null);
+  assert.equal(windowFromBridge(null), null);
+  // a window with % but no reset is still valid (reset just unknown)
+  assert.deepEqual(windowFromBridge({ used_percentage: 0 }), { pct: 0, resetAt: null, status: undefined });
+});
+
+test("localQuota: parseLocalQuota reads the statusline bridge payload", () => {
+  const raw = JSON.stringify({
+    writtenAtSec: 1782107243,
+    rate_limits: {
+      five_hour: { used_percentage: 1, resets_at: 1782122400 },
+      seven_day: { used_percentage: 10, resets_at: 1782165600 },
+    },
+  });
+  const r = parseLocalQuota(raw);
+  assert.equal(r.ok, true);
+  assert.equal(r.writtenAtSec, 1782107243);
+  assert.equal(r.fiveH?.pct, 1);
+  assert.equal(r.sevenD?.pct, 10);
+});
+
+test("localQuota: parseLocalQuota fails safe on junk / missing windows", () => {
+  assert.equal(parseLocalQuota("not json").ok, false);
+  assert.equal(parseLocalQuota(JSON.stringify({ writtenAtSec: 1, rate_limits: {} })).ok, false);
+});
+
+test("buildView: last-known reading shows an 'updated N ago' note when aged (both langs)", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const okAged = {
+    state: "ok" as const,
+    fiveH: { pct: 12, resetAt: now + WINDOW_5H_SECONDS },
+    sevenD: null,
+    asOfSec: now - 600, // 10 min old
+  };
+  assert.match(buildView(totals, W, okAged, now, "en").tooltip, /Updated .* ago/);
+  assert.match(buildView(totals, W, okAged, now, "ru").tooltip, /Обновлено .* назад/);
+  // fresh reading (age < 60s) → no note (avoids "updated 0 ago" noise)
+  const okFresh = { ...okAged, asOfSec: now - 5 };
+  assert.doesNotMatch(buildView(totals, W, okFresh, now, "en").tooltip, /Updated/);
+});
+
+test("shouldPoll: shorter throttle after a failure still gated by activity window", () => {
+  const now = 1_000_000;
+  const active = Date.now(); // transcript just touched
+  // 50s since last fetch: blocked at the normal 300s throttle...
+  assert.equal(shouldPoll(now - 50, now, 300, active, 0), false);
+  // ...but allowed at the shortened fail-retry throttle (45s), with the activity
+  // window kept at the normal 300s so the short gap doesn't shrink "is active".
+  assert.equal(shouldPoll(now - 50, now, FAIL_RETRY_SEC, active, 0, 300), true);
+  // idle (no recent activity) → still no poll even on the short retry gap
+  assert.equal(shouldPoll(now - 50, now, FAIL_RETRY_SEC, Date.now() - 10 * 60 * 1000, 0, 300), false);
+});
+
+test("buildView: stale reading is NOT painted in the bar — neutral offline marker instead", () => {
+  const totals = { input: 1000, output: 1000, work: 2000, cacheRead: 0, cacheWrite: 0 };
+  const now = 2_000_000;
+  const q = (asOfSec: number) => ({
+    state: "ok" as const,
+    fiveH: { pct: 80, resetAt: now + WINDOW_5H_SECONDS }, // high % that WOULD tint red if painted
+    sevenD: { pct: 13, resetAt: now + 7 * 86400 },
+    asOfSec,
+  });
+  // fresh (2 min old) → live colored % shown, no offline marker
+  const live = buildView(totals, W, q(now - 120), now, "en");
+  assert.match(live.text, /80%/);
+  assert.doesNotMatch(live.text, /offline/);
+
+  // stale (20 min old) → NO colored %, neutral offline marker, item not tinted
+  const stale = buildView(totals, W, q(now - 20 * 60), now, "en");
+  assert.match(stale.text, /offline/);
+  assert.doesNotMatch(stale.text, /80%/); // the misleading colored % is gone from the bar
+  assert.equal(stale.level, "normal"); // stale data must NOT drive the item color
+  // ...but the last-known value + age is still available in the tooltip
+  assert.match(stale.tooltip, /80%/);
+  assert.match(stale.tooltip, /Updated .* ago/);
+  // ru offline marker too
+  assert.match(buildView(totals, W, q(now - 20 * 60), now, "ru").text, /офлайн/);
+});
+
+test("knownModelWindow: API-confirmed offline fallback windows, prefix-matched", () => {
+  assert.equal(knownModelWindow("claude-opus-4-8"), 1_000_000);
+  assert.equal(knownModelWindow("claude-sonnet-4-6"), 1_000_000);
+  assert.equal(knownModelWindow("claude-fable-5"), 1_000_000);
+  // dated id resolves via prefix
+  assert.equal(knownModelWindow("claude-haiku-4-5-20251001"), 200_000);
+  // unknown model / empty → null (caller relies on live API or hides %)
+  assert.equal(knownModelWindow("claude-future-9-9"), null);
+  assert.equal(knownModelWindow(null), null);
+});
+
+test("buildPanelHtml: stale reading shows offline + muted last-known, not a live %", () => {
+  const totals = { input: 1000, output: 1000, work: 2000, cacheRead: 0, cacheWrite: 0 };
+  const now = 3_000_000;
+  const q = (asOfSec: number) => ({
+    state: "ok" as const,
+    fiveH: { pct: 7, resetAt: now + WINDOW_5H_SECONDS },
+    sevenD: { pct: 11, resetAt: now + 7 * 86400 },
+    asOfSec,
+  });
+  // fresh → painted quota bars present
+  const live = buildPanelHtml(totals, W, q(now - 60), now, "en");
+  assert.match(live, /class="bar"/);
+  // stale → no painted bars; offline reason + muted "Last known" line with age
+  const stale = buildPanelHtml(totals, W, q(now - 30 * 60), now, "en");
+  assert.doesNotMatch(stale, /class="bar"/);
+  assert.match(stale, /Last known: .*7%.*11%/);
+  assert.match(stale, /updated .* ago/);
+  assert.match(buildPanelHtml(totals, W, q(now - 30 * 60), now, "ru"), /Последнее известное/);
 });
 
 test("buildView: tooltip carries the switch-language command link (both langs)", () => {

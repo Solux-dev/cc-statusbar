@@ -27,6 +27,11 @@ export interface QuotaView {
   fiveH: QuotaWindow | null;
   sevenD: QuotaWindow | null;
   state: "ok" | "no-credentials" | "error" | "rate-limited" | "disabled";
+  /** Unix seconds the shown reading was obtained (network fetch or local
+   *  statusline bridge write). Drives the "updated N ago" freshness note. */
+  asOfSec?: number;
+  /** Which source the shown reading came from (for the panel/diagnostics). */
+  source?: "network" | "local";
 }
 
 /** Context-window fill for the active (Lead) session. `usedTokens` = the real
@@ -169,6 +174,12 @@ function dot(level: PaceLevel): string {
   return level === "over" ? "🔴" : level === "tight" ? "🟡" : "🟢";
 }
 
+/** A reading older than this is no longer "live": the bar stops painting the
+ *  colored % and shows the neutral offline marker instead (the % moves to the
+ *  tooltip). Comfortably above the normal 5-min poll cadence so healthy polling
+ *  never trips it, but short enough that a stuck poll flips to honest-offline. */
+const QUOTA_FRESH_SECONDS = 6 * 60;
+
 export function buildView(
   totals: Totals,
   weights: Weights,
@@ -196,7 +207,13 @@ export function buildView(
     segs.push(`${dot(p)} ${label} ${w.pct.toFixed(0)}%${reset}`);
   };
 
-  if (quota.state === "ok") {
+  // The colored % is the whole point of the bar — a glance must read "within
+  // limits / tight / over". So we ONLY paint it when the reading is actually
+  // LIVE. A stale reading (poll stuck on a flaky link) is NOT painted: coloring
+  // old numbers tells a confident lie. Stale → fall through to the neutral
+  // offline marker below; the exact last-known values stay in the tooltip.
+  const fresh = quota.asOfSec == null || nowSec - quota.asOfSec < QUOTA_FRESH_SECONDS;
+  if (quota.state === "ok" && fresh) {
     windowSeg(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowSeg(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
   }
@@ -204,17 +221,22 @@ export function buildView(
   // Context is a FIXED-fill signal — it colours its OWN segment but does NOT
   // drive the item background (that stays tariff-pace, two different models).
   const ctxSeg = contextSegment(context, m);
-  // fallback when tariff unavailable: show effective so the bar is never empty.
+  // fallback when no LIVE tariff in the bar: show effective so the bar is never
+  // empty, prefixed by a neutral marker saying WHY there's no live %. A stale
+  // ok-reading is treated as "offline" here (no live refresh) — same neutral,
+  // un-colored signal as a network error. "disabled" is an intentional user
+  // choice → stay silent.
   const effFallback = `$(pulse) ${m.effShort} ${fmtTokens(eff)}`;
-  // When the quota could not be fetched (network down, no token, throttled) the
-  // % is absent — but instead of silently dropping to the bare token-equivalent
-  // (which reads as "the limits vanished"), prefix a marker naming WHY and keep
-  // the local data visible beside it. "disabled" is an intentional user choice,
-  // not a failure → no marker there.
+  let offlineMarker: string | null = null;
+  if (quota.state !== "ok" && quota.state !== "disabled") {
+    offlineMarker = m.quotaOfflineShort[quota.state];
+  } else if (quota.state === "ok" && !fresh) {
+    offlineMarker = m.quotaOfflineShort.error; // had data once, but it's not live now
+  }
   const tariffText = segs.length
     ? segs.join(" · ")
-    : quota.state !== "ok" && quota.state !== "disabled"
-    ? `${m.quotaOfflineShort[quota.state]} · ${effFallback}`
+    : offlineMarker
+    ? `${offlineMarker} · ${effFallback}`
     : effFallback;
   const text = ctxSeg ? `${tariffText} · ${ctxSeg}` : tariffText;
 
@@ -236,6 +258,13 @@ export function buildView(
     t.push(m.tariffHeader);
     t.push(quotaLine(m.w5h, quota.fiveH, WINDOW_5H_SECONDS));
     t.push(quotaLine(m.w7d, quota.sevenD, WINDOW_7D_SECONDS));
+    // Honest freshness: if the shown reading isn't brand-new (a poll that hasn't
+    // refreshed yet, or a local-bridge value while the link is down), say how
+    // old it is — the % stays visible, never silently dropped.
+    if (quota.asOfSec) {
+      const ageSec = nowSec - quota.asOfSec;
+      if (ageSec >= 60) t.push(m.quotaAsOf(fmtRemaining(ageSec, m.units)));
+    }
   } else {
     t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
     t.push(m.localAlwaysAccurate);
@@ -369,14 +398,29 @@ export function buildPanelHtml(
   const cl = contextLine(context, m);
   const ctxRow = cl ? `<div class="ctxrow">${esc(cl)}</div>` : "";
 
+  // Same freshness rule as the status bar: only paint the colored % when the
+  // reading is LIVE. A stale "ok" reading is shown as offline (with the exact
+  // last-known values kept as muted text), so the panel never presents an
+  // out-of-date number as current.
+  const fresh = quota.asOfSec == null || nowSec - quota.asOfSec < QUOTA_FRESH_SECONDS;
   let quotaSection: string;
-  if (quota.state === "ok") {
+  if (quota.state === "ok" && fresh) {
     windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
     quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}${ctxRow}`;
   } else {
+    const reason = quota.state === "ok" ? m.quotaStateMsg.error : m.quotaStateMsg[quota.state];
+    let lastKnown = "";
+    if (quota.state === "ok" && (quota.fiveH || quota.sevenD)) {
+      const parts: string[] = [];
+      if (quota.fiveH) parts.push(`${m.w5h} ${quota.fiveH.pct.toFixed(0)}%`);
+      if (quota.sevenD) parts.push(`${m.w7d} ${quota.sevenD.pct.toFixed(0)}%`);
+      const ago = quota.asOfSec ? fmtRemaining(nowSec - quota.asOfSec, m.units) : "?";
+      lastKnown = `<p class="muted">${esc(m.quotaLastKnown(parts.join(", "), ago))}</p>`;
+    }
     quotaSection =
-      `<p class="muted">${esc(m.quotaStateMsg[quota.state])}</p>` +
+      `<p class="muted">${esc(reason)}</p>` +
+      lastKnown +
       `<p class="muted">${esc(m.panelLocalAccurate)}</p>` +
       ctxRow;
   }

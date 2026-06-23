@@ -5,7 +5,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { readSessionTotals } from "./transcript";
-import { fetchQuota, fetchModelWindow, shouldPoll, QuotaResult, ModelWindowResult } from "./quota";
+import { fetchQuota, fetchModelWindow, shouldPoll, FAIL_RETRY_SEC, QuotaResult, ModelWindowResult } from "./quota";
 import {
   buildView,
   buildPanelHtml,
@@ -15,7 +15,8 @@ import {
   ContextView,
   CacheView,
 } from "./render";
-import { Weights, ContextInfo } from "./metrics";
+import { Weights, ContextInfo, QuotaWindow, knownModelWindow } from "./metrics";
+import { readLocalQuota } from "./localQuota";
 import { resolveLang, messages, Lang, LangSetting } from "./i18n";
 import { ProviderMode, ProviderSelection, UsageProviderKind } from "./providerTypes";
 import {
@@ -55,6 +56,24 @@ let lastQuota: QuotaResult | null = null;
 let lastFetchSec = 0;
 let rateLimitedUntilSec = 0;
 let inFlight = false;
+// True after a failed (timeout/network) poll → the next poll is allowed sooner
+// (FAIL_RETRY_SEC) so an intermittent link is caught quickly instead of waiting
+// the full interval. Reset to false on any successful poll.
+let lastPollFailed = false;
+
+// Best-known quota across BOTH sources — the network poll AND the local
+// statusline bridge (~/.claude/.cc-statusbar-quota.json). The displayed value
+// is always the FRESHEST valid reading from either; this is what makes the new
+// local source a strict SUPERSET of the old behavior (the network poll keeps
+// updating this exactly as before — we only ADD a second way to refresh it).
+// Persisted to globalState so a reload/update never blanks the line.
+interface GoodQuota {
+  fiveH: QuotaWindow | null;
+  sevenD: QuotaWindow | null;
+  atSec: number;
+  source: "network" | "local";
+}
+let lastGoodQuota: GoodQuota | null = null;
 
 let lastCodex: CodexAppServerResult | null = null;
 let lastCodexFetchSec = 0;
@@ -87,12 +106,12 @@ function codexDiagnostics(result: CodexAppServerResult): string[] {
   return result.state === "error" ? [result.detail, ...result.diagnostics] : result.diagnostics;
 }
 
-// model context-window limits: cached per model id (limits don't change → 24h),
-// persisted in globalState so a restart doesn't refetch. Errors retried sooner.
-const MODEL_LIMIT_TTL_SEC = 24 * 3600;
-// Retry an errored/missing limit lookup soon so a transient first-fetch failure
-// (e.g. a fresh install, a momentary network blip) self-heals within ~a minute
-// instead of showing "(limit n/a)" for 10 minutes.
+// model context-window limits: cached per model id and persisted in globalState.
+// A model's window is IMMUTABLE, so a known-good value is kept indefinitely and
+// is NEVER overwritten by a later failed fetch — that overwrite was what hid the
+// context % on a weak link (a 24h refresh expired mid-session, the refetch timed
+// out, and the error replaced the good value). We only (re)fetch when we have no
+// good value yet, retrying on a short cadence so a fresh model self-heals fast.
 const MODEL_LIMIT_RETRY_SEC = 60;
 const modelLimits = new Map<string, ModelWindowResult>();
 const limitInFlight = new Set<string>();
@@ -214,18 +233,28 @@ function languageChoicesMarkdown(m: ReturnType<typeof messages>, selected: LangS
  *  background fetch when missing/stale. Never blocks the UI tick. */
 function ensureModelLimit(id: string, credentialsPath: string, nowSec: number): ModelWindowResult | null {
   const cached = modelLimits.get(id) || null;
-  const ttl = cached?.state === "ok" ? MODEL_LIMIT_TTL_SEC : MODEL_LIMIT_RETRY_SEC;
-  const fresh = cached !== null && nowSec - cached.fetchedAtSec < ttl;
-  if (!fresh && !limitInFlight.has(id)) {
+  const haveGood = cached?.state === "ok" && !!cached.maxInputTokens;
+  // Refetch ONLY when we have no good value yet (a good one is immutable → kept
+  // forever). Without one, retry on a short cadence for weak-link resilience.
+  const lastTrySec = cached?.fetchedAtSec ?? 0;
+  const needFetch = !haveGood && nowSec - lastTrySec >= MODEL_LIMIT_RETRY_SEC;
+  if (needFetch && !limitInFlight.has(id)) {
     limitInFlight.add(id);
     fetchModelWindow(id, credentialsPath, nowSec)
       .then((r) => {
-        modelLimits.set(id, r);
-        void extCtx?.globalState.update(`modelWindow:${id}`, r);
+        if (r.state === "ok" && r.maxInputTokens) {
+          modelLimits.set(id, r);
+          void extCtx?.globalState.update(`modelWindow:${id}`, r); // persist ONLY good values
+        } else {
+          // Failed fetch: never overwrite a good value, never persist an error.
+          // Keep the good one if present; otherwise record the attempt in memory
+          // so the retry cadence advances.
+          modelLimits.set(id, cached?.state === "ok" ? cached : r);
+        }
       })
       .finally(() => limitInFlight.delete(id));
   }
-  return cached;
+  return modelLimits.get(id) || null;
 }
 
 /** Map transcript context + model-limit cache into a render ContextView. */
@@ -243,12 +272,19 @@ function buildContextView(
     return { usedTokens, limitTokens: null, limitState: "pending" };
   }
   const cached = ensureModelLimit(ctxInfo.modelId, credentialsPath, nowSec);
-  if (!cached) return { usedTokens, limitTokens: null, limitState: "pending" };
-  if (cached.state === "ok" && cached.maxInputTokens) {
+  // 1) Live API value is authoritative when we have it.
+  if (cached?.state === "ok" && cached.maxInputTokens) {
     return { usedTokens, limitTokens: cached.maxInputTokens, limitState: "ok" };
   }
-  // definitive failure → fail visibly, and surface WHY (http code / reason) so a
-  // user can tell a transient blip from a real problem when reporting.
+  // 2) No live value yet → use the built-in known window so the context % shows
+  // INSTANTLY and fully offline (the background fetch above overrides it once it
+  // succeeds). This is why context works on a weak link where the live fetch may
+  // not: known models never need the network at all.
+  const known = knownModelWindow(ctxInfo.modelId);
+  if (known) return { usedTokens, limitTokens: known, limitState: "ok" };
+  // 3) Truly unknown model: no fetch yet → pending; a definitive fetch failure →
+  // fail visibly with the reason (so a real problem is reportable).
+  if (!cached) return { usedTokens, limitTokens: null, limitState: "pending" };
   return { usedTokens, limitTokens: null, limitState: "unavailable", limitDetail: cached.detail };
 }
 
@@ -428,15 +464,26 @@ async function tick() {
   if (!conf.quotaEnabled) {
     quotaView = { fiveH: null, sevenD: null, state: "disabled" };
   } else {
+    // ── Source 1: network poll — UNCHANGED. Same throttle, activity gate,
+    // timeouts, and retries as before. We do not weaken or remove it; it keeps
+    // updating lastQuota exactly as today (the no-regression guarantee).
+    // Throttle: normally minPollSeconds, but only FAIL_RETRY_SEC after a failed
+    // poll so a flaky link recovers fast. The activity window stays at the
+    // normal interval (a short retry gap must not shrink "is the user active?").
+    const throttleSec = lastPollFailed
+      ? Math.min(conf.minPollSeconds, FAIL_RETRY_SEC)
+      : conf.minPollSeconds;
     if (
       !inFlight &&
-      shouldPoll(lastFetchSec, nowSec, conf.minPollSeconds, mtimeMs, rateLimitedUntilSec)
+      shouldPoll(lastFetchSec, nowSec, throttleSec, mtimeMs, rateLimitedUntilSec, conf.minPollSeconds)
     ) {
       inFlight = true;
       fetchQuota(conf.credentialsPath, nowSec)
         .then((r) => {
           lastQuota = r;
           lastFetchSec = r.fetchedAtSec;
+          // a network/timeout failure → retry soon; success/429 → normal cadence
+          lastPollFailed = r.state === "error";
           if (r.state === "rate-limited") {
             const retry = Number(r.detail) || 60;
             rateLimitedUntilSec = nowSec + Math.max(retry, conf.minPollSeconds);
@@ -453,9 +500,49 @@ async function tick() {
           inFlight = false;
         });
     }
-    quotaView = lastQuota
-      ? { fiveH: lastQuota.fiveH, sevenD: lastQuota.sevenD, state: lastQuota.state }
-      : { fiveH: null, sevenD: null, state: "error" };
+
+    // ── Source 2: local statusline bridge — zero network, cheap local read.
+    // This is the SAME real server data Claude Code shows in its own usage view,
+    // mirrored to a file by the companion statusline.py — so it stays available
+    // on links too weak for our own poll to complete.
+    const local = readLocalQuota();
+
+    // ── Merge: freshest valid reading wins, then persist as last-known. Strict
+    // ">" so a tie never flip-flops; the network reading is preferred when it is
+    // at least as fresh, the local one when it is newer.
+    const candidates: GoodQuota[] = [];
+    if (lastQuota?.state === "ok" && (lastQuota.fiveH || lastQuota.sevenD)) {
+      candidates.push({ fiveH: lastQuota.fiveH, sevenD: lastQuota.sevenD, atSec: lastQuota.fetchedAtSec, source: "network" });
+    }
+    if (local.ok) {
+      candidates.push({ fiveH: local.fiveH, sevenD: local.sevenD, atSec: local.writtenAtSec, source: "local" });
+    }
+    let refreshed = false;
+    for (const c of candidates) {
+      if (!lastGoodQuota || c.atSec > lastGoodQuota.atSec) {
+        lastGoodQuota = c;
+        refreshed = true;
+      }
+    }
+    if (refreshed) void extCtx?.globalState.update("lastGoodQuota", lastGoodQuota);
+
+    if (lastGoodQuota) {
+      // We have a real reading (possibly last-known) → always show it. Never
+      // blank when at least one source has ever succeeded.
+      quotaView = {
+        fiveH: lastGoodQuota.fiveH,
+        sevenD: lastGoodQuota.sevenD,
+        state: "ok",
+        asOfSec: lastGoodQuota.atSec,
+        source: lastGoodQuota.source,
+      };
+    } else {
+      // Never had ANY reading yet → keep today's exact behavior: surface the
+      // network state (drives the offline marker), or a generic error.
+      quotaView = lastQuota
+        ? { fiveH: lastQuota.fiveH, sevenD: lastQuota.sevenD, state: lastQuota.state }
+        : { fiveH: null, sevenD: null, state: "error" };
+    }
   }
 
   const view = buildView(totals, conf.weights, quotaView, nowSec, lang, contextView, cacheView);
@@ -551,10 +638,23 @@ export function activate(context: vscode.ExtensionContext) {
     for (const k of context.globalState.keys()) {
       if (!k.startsWith("modelWindow:")) continue;
       const r = context.globalState.get<ModelWindowResult>(k);
-      if (r && typeof r.id === "string") modelLimits.set(r.id, r);
+      // Only restore GOOD values. A persisted error (from the old overwrite bug)
+      // is ignored so it can't keep the context % hidden — we refetch instead.
+      if (r && typeof r.id === "string" && r.state === "ok" && r.maxInputTokens) {
+        modelLimits.set(r.id, r);
+      }
     }
   } catch {
     /* globalState.keys() unavailable on very old VS Code — fine, refetch lazily */
+  }
+  // hydrate the last-known quota so a reload/update shows the limits immediately
+  // instead of blanking until the first successful poll (the exact "stopped
+  // showing after the update" symptom this guards against).
+  try {
+    const g = context.globalState.get<GoodQuota>("lastGoodQuota");
+    if (g && typeof g.atSec === "number" && (g.fiveH || g.sevenD)) lastGoodQuota = g;
+  } catch {
+    /* fine — falls back to fetching fresh */
   }
   rebuildItem();
 

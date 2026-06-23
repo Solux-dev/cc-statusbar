@@ -3,6 +3,56 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.19] — 2026-06-22
+
+### Fixed
+
+- **Quota now survives a flaky connection (the main fix).** On an intermittent
+  link (e.g. phone tethering) the periodic quota request would time out and the
+  extension then waited the FULL poll interval (5 min) before trying again, so
+  the limits could stay stale for a long time. After a failed poll it now
+  retries quickly (~45s), so a link that works for only short windows is caught
+  within a minute or two instead of freezing. The network poll's activity gating
+  is otherwise unchanged.
+- **The context-window % no longer vanishes on a weak link.** Two fixes: (1) a
+  model's window was cached for 24h, and when that expired mid-session a timed-out
+  refresh OVERWROTE the good cached value with an error, hiding the context %; a
+  model's window never changes, so a known-good value is now kept indefinitely and
+  is never overwritten by a failed fetch (failures are just retried; legacy cached
+  errors are ignored on start). (2) The extension now ships a built-in table of
+  API-confirmed context windows for current Claude models, so the context % shows
+  INSTANTLY and fully offline — the live API value still overrides it when
+  reachable (and covers future/unknown models).
+- **The expandable panel no longer shows a stale quota as if it were live.** It
+  now applies the same freshness rule as the status bar: a non-live reading shows
+  an offline note plus the exact last-known values as muted text ("Last known:
+  5h N%, 7d N% (updated N ago)"), instead of painting old percentages.
+
+### Changed
+
+- **The colored % is now shown ONLY while it's live; stale data is never
+  painted.** The bar's whole job is a glanceable color (within limits / tight /
+  over), so coloring an out-of-date number is a confident lie. If a reading is
+  no longer fresh (the poll has been unable to refresh for more than the poll
+  cadence), the bar drops the colored % and shows a neutral, un-colored
+  "offline" marker instead — the simple rule becomes "colored % = live, offline
+  marker = no live data right now", with no need to read fine print. The exact
+  last-known values and their age ("updated N ago") remain in the hover tooltip
+  for anyone who wants them.
+
+### Added
+
+- **Optional local, zero-network quota source (advanced/opt-in).** The extension
+  now reads `~/.claude/.cc-statusbar-quota.json` if that file exists, using its
+  5h/7d values with no network call at all. The displayed value is always the
+  *freshest* of this file and the network poll — strictly additive, never a
+  regression. Nothing writes this file by default; it's a hook for users whose
+  Claude Code status line mirrors the real limits there (Claude Code hands those
+  limits to the status-line command on each turn). Note that the VS Code/Cursor
+  IDE integration runs Claude Code without a status line, so this path only
+  applies to terminal `claude` sessions — in the IDE, the resilient network poll
+  above is what keeps the limits current.
+
 ## [1.0.18] — 2026-06-22
 
 ### Added
