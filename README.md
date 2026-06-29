@@ -153,12 +153,31 @@ _По умолчанию язык берётся из языка редакто�
 - **Tokens / token-equivalent / cache** — parsed from the **local** transcript
   `~/.claude/projects/<slug>/<session>.jsonl` (+ its `subagents/`). No network,
   **zero token cost**, independent of Anthropic auth.
-- **Real 5h/7d quota** — a tiny throttled request to Anthropic reads the
-  `anthropic-ratelimit-unified-*` response headers (uses your existing local
-  OAuth token). **~a few tokens per poll**, at most once per
-  `quota.minPollSeconds` (default 300s) and **only while the session is
-  active**. Can be turned off (`ccStatusbar.quota.enabled: false`) — then only
-  the free local metrics show.
+- **Real 5h/7d quota** — read from **two independent sources**, merged so the
+  **freshest valid reading wins** (and once either has ever succeeded the line
+  is never blank again):
+  1. **Passive local bridge — zero network, zero token cost.** The companion
+     `statusline.py` mirrors the `rate_limits` that Claude Code already hands to
+     its **statusLine hook** into `~/.claude/.cc-statusbar-quota.json`; the
+     extension just reads that file. This is the **same real server data Claude
+     Code shows in its own usage view**, obtained without any request of our own
+     — so it keeps working on links too weak for a network call to complete, and
+     it covers **both** terminal and in-editor Claude Code sessions. Works on
+     **Windows, macOS, and Linux** (it rides the official statusLine contract,
+     not any OS-specific keychain or in-process traffic interception).
+  2. **Network poll — resilient fallback.** A tiny throttled request to
+     Anthropic reads the `anthropic-ratelimit-unified-*` response headers (uses
+     your existing local OAuth token). **~a few tokens per poll**, at most once
+     per `quota.minPollSeconds` (default 300s) and **only while the session is
+     active**. This is the **zero-setup** path: it works even if you have not
+     wired up the statusLine bridge.
+
+  Why two? Deliberate redundancy and coverage. The local bridge gives a
+  passive, zero-network reading wherever the statusLine hook runs; the network
+  poll guarantees a reading with no setup at all. Together they stay accurate on
+  flaky links, in the terminal, and in the editor — across all three OSes.
+  Quota can be turned off entirely (`ccStatusbar.quota.enabled: false`) — then
+  only the free local metrics show.
 - **Context limit** — read once per model from the Anthropic Models API
   (`max_input_tokens`, cached 24h). If it cannot be fetched, the `%` is hidden
   instead of guessed.
@@ -188,8 +207,9 @@ No telemetry, no extension-owned server, and no analytics.
   Codex/OpenAI login that Codex already has. Local Codex session files are read
   only for token counters.
 
-The code is small and MIT-licensed — read `src/quota.ts`, `src/transcript.ts`,
-and `src/codexAppServer.ts` to verify.
+The code is small and MIT-licensed — read `src/quota.ts` (network poll),
+`src/localQuota.ts` (passive statusLine bridge), `src/transcript.ts`, and
+`src/codexAppServer.ts` to verify.
 
 ## Install
 
