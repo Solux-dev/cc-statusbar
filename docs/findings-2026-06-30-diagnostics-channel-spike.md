@@ -80,10 +80,38 @@ Method: static analysis of the **installed** official extension bundle
   who also haven't wired the bridge — and even they already get the network
   poll. Cost/fragility outweighs it.
 
-## Better alternative to pursue instead (separate task)
+## On-disk cache alternative — CHECKED, disproven (2026-06-30)
 
-The official extension fetches `/api/oauth/usage` and parses the body itself.
-**Check whether it caches that quota to disk** (a file or VS Code `globalState`).
-If it does, reading that cache would give us a true **zero-network + zero-setup**
-source, cross-platform, with no traffic interception. This is the promising
-direction — not `diagnostics_channel`.
+Hypothesis: the official extension fetches `/api/oauth/usage` and parses the
+body, so maybe it **caches that quota to disk** — which we could read passively
+for a true **zero-network + zero-setup** source. Checked on this machine
+(VS Code, official extension 2.1.195). **It does not.**
+
+Evidence (all local):
+
+- `anthropic.claude-code` has **no `globalStorage` directory** of its own
+  (`AppData/Roaming/Code/User/globalStorage/` contains only `solux-dev.cc-statusbar`
+  — ours). It uses `globalState` in the shared `state.vscdb`.
+- The shared `state.vscdb` contains **no quota keys** — no `utilization`,
+  `five_hour`, `used_percentage`, `resetsAt`, `rateLimit`, `monthlyLimit`, or
+  `sevenDaySonnet`. The `claude-code` strings present there are webview/walkthrough
+  state and **Copilot Chat** model-registry entries, not quota.
+- `~/.claude` has no `*usage*/*quota*/*limit*` file and no JSON carrying quota
+  fields (other than our own bridge `.cc-statusbar-quota.json`).
+
+The `fetchUtilization` result (`$Ze(s.data)`) is consumed **in memory**
+(UI/webview) and, when a statusLine hook is configured, pushed to it via
+**stdin** — exactly the path our companion `statusline.py` already taps.
+
+## Conclusion — our two-source design is the optimum, not a compromise
+
+Real 5h/7d quota **cannot** be obtained "zero-network + zero-setup". There are
+exactly two physically available paths, and we already use both:
+
+1. **Network call** → our poll ([`src/quota.ts`](../src/quota.ts)) — zero-setup.
+2. **statusLine hook** → our bridge ([`src/localQuota.ts`](../src/localQuota.ts))
+   — zero-network.
+
+No third path exists: interception (`diagnostics_channel`) can't reach the
+response body, and there is no on-disk quota cache to read. We are not behind the
+competitor — we cover the same two physically possible paths, cross-platform.
