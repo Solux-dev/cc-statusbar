@@ -1,6 +1,7 @@
 # Claude/Codex Usage — Quota & Context Statusbar
 
 [![Marketplace](https://img.shields.io/visual-studio-marketplace/v/solux-dev.cc-statusbar?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
+[![Open VSX](https://img.shields.io/open-vsx/v/solux-dev/cc-statusbar?label=Open%20VSX)](https://open-vsx.org/extension/solux-dev/cc-statusbar)
 
 A VS Code status-bar item for **Claude Code** and **Codex** usage: real
 5-hour / 7-day quota when the provider exposes it, context-window fill, cache
@@ -8,13 +9,16 @@ signals, and a cache-weighted token-equivalent breakdown — colour-coded, at a
 glance, without leaving the editor.
 
 Claude Code keeps the full local-transcript experience: quota, context, cache
-tier, cache hit rate, and token details. Codex support uses Codex app-server and
-local Codex history when you select the Codex provider, showing the same layout
-where data is available and clear "not available" text where Codex does not
-expose a metric yet.
+tier, cache hit rate, and token details. Codex uses its local app-server and
+rollout history for quota, context, cached input, token details, and now the
+active **model + reasoning effort**. In **Auto**, the bar follows whichever
+provider is actually active in the workspace instead of being held by an old
+session.
 
 **Install:** search **“Claude/Codex Usage”** in the VS Code Extensions
-view, or run `code --install-extension solux-dev.cc-statusbar`.
+view, use [Open VSX](https://open-vsx.org/extension/solux-dev/cc-statusbar) for
+VSCodium-compatible editors, or run
+`code --install-extension solux-dev.cc-statusbar`.
 
 | English | Русский |
 |---------|---------|
@@ -32,7 +36,7 @@ talking to**, then the **tariff** per window, then the **context-window fill**:
 
 ```text
 ◆ Opus 5 · effort high · 🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
-Codex · 🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
+◆ GPT-5.6 Sol · effort high · Codex · 🟢 7d 10% (6d21h) · 🟢 ctx 18%
 ```
 
 `◆ Opus 5` is the model of the session in front of you, **confirmed** by its
@@ -81,6 +85,10 @@ transcripts and are excluded from it — their tokens are still counted in the
 session totals (see [Delegated work](#delegated-work--where-your-tokens-actually-went)).
 Like the context dot, the model segment never recolours the whole item: identity
 is information, not a quota with consequences.
+
+For Codex, `◆ GPT-5.6 Sol · effort high` comes from the current local rollout's
+`turn_context`. It is the lead turn's actual configuration, costs no extra
+request or token, and never substitutes a spawned subagent's model.
 
 `ctx 47%` is how full the model's context window is right now (current input ÷
 the model's window limit) — a quick read of how big a next step you can take. Its
@@ -165,8 +173,10 @@ Choose provider: Auto · Claude Code · Codex
 Language: Auto · RU · EN
 ```
 
-- **Auto** is conservative: it keeps the existing Claude Code behaviour unless a
-  provider is explicitly selected. This avoids surprising current users.
+- **Auto** watches recent workspace activity from both providers. A finished
+  Claude transcript no longer holds the bar while Codex is running; when both
+  are genuinely live, the bar asks you to choose instead of guessing which chat
+  has focus. While both are idle, the most recently active provider stays shown.
 - **Claude Code** reads the current workspace's Claude transcript and quota
   channel.
 - **Codex** talks to the local Codex app-server and reads local Codex token

@@ -7,6 +7,25 @@ import type {
 } from "./providerTypes";
 
 export const CODEX_NOT_CONNECTED_DETAIL = "Codex app-server is unavailable.";
+export const PROVIDER_ACTIVE_WINDOW_MS = 60_000;
+
+export function isRecentProviderActivity(
+  lastActivityMs: number | null | undefined,
+  nowMs: number,
+  windowMs = PROVIDER_ACTIVE_WINDOW_MS
+): boolean {
+  return lastActivityMs != null && lastActivityMs <= nowMs && nowMs - lastActivityMs <= windowMs;
+}
+
+export function newestActivityProvider(
+  activities: Array<{ provider: UsageProviderKind; lastActivityMs: number | null }>
+): UsageProviderKind | null {
+  const known = activities.filter(
+    (a): a is { provider: UsageProviderKind; lastActivityMs: number } => a.lastActivityMs != null
+  );
+  known.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+  return known[0]?.provider || null;
+}
 
 export function normalizeProviderMode(value: unknown): ProviderMode {
   return value === "claude" || value === "codex" || value === "auto" ? value : "auto";

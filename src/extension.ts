@@ -24,17 +24,22 @@ import { isRealModelId, readOpenChats, readPlannedEffort, readPlannedModel, shor
 import { resolveLang, messages, Lang, LangSetting } from "./i18n";
 import { ProviderMode, ProviderSelection, UsageProviderKind } from "./providerTypes";
 import {
+  isRecentProviderActivity,
+  newestActivityProvider,
   normalizeProviderMode,
   providerActivity,
   resolveProvider,
 } from "./providerResolver";
 import {
   CodexAppServerResult,
+  CodexThreadSummary,
   CodexTokenUsageWatcher,
+  codexThreadActivityMs,
   fetchCodexAppServerStatus,
+  readCodexRolloutIdentity,
   readCodexRolloutTokenUsage,
 } from "./codexAppServer";
-import { codexCache, codexContext } from "./codexProvider";
+import { codexCache, codexContext, shortCodexModelLabel } from "./codexProvider";
 
 let item: vscode.StatusBarItem;
 let timer: NodeJS.Timeout | undefined;
@@ -83,6 +88,8 @@ let lastCodex: CodexAppServerResult | null = null;
 let lastCodexFetchSec = 0;
 let codexInFlight = false;
 let codexTokenWatcher: CodexTokenUsageWatcher | undefined;
+let lastCodexThreadRefreshSec = 0;
+const CODEX_THREAD_REFRESH_SEC = 10;
 
 function logDiagnostics(scope: string, lines: string[]): void {
   const clean = lines.map((line) => line.trim()).filter(Boolean);
@@ -108,6 +115,23 @@ function logDiagnostics(scope: string, lines: string[]): void {
 
 function codexDiagnostics(result: CodexAppServerResult): string[] {
   return result.state === "error" ? [result.detail, ...result.diagnostics] : result.diagnostics;
+}
+
+function observedCodexThread(cwd: string): CodexThreadSummary | null {
+  const watched = codexTokenWatcher?.latestThread(cwd) || null;
+  const fetched = lastCodex?.state === "ok" ? lastCodex.thread : null;
+  if (!watched) return fetched;
+  if (!fetched) return watched;
+  return (codexThreadActivityMs(watched) || 0) >= (codexThreadActivityMs(fetched) || 0) ? watched : fetched;
+}
+
+function refreshCodexThread(nowSec: number, conf: ReturnType<typeof cfg>, cwd: string): void {
+  const watcher = codexTokenWatcher;
+  watcher?.ensureStarted(conf.codexCommandPath);
+  if (!watcher?.isReady()) return;
+  if (nowSec - lastCodexThreadRefreshSec < CODEX_THREAD_REFRESH_SEC) return;
+  lastCodexThreadRefreshSec = nowSec;
+  void watcher.refreshThread(cwd).then(() => void tick());
 }
 
 // model context-window limits: cached per model id and persisted in globalState.
@@ -482,9 +506,18 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
   const planType =
     lastCodex?.state === "ok" ? lastCodex.rateLimits?.planType || lastCodex.account?.planType || null : null;
   const codexQuota = quotaFromCodex(lastCodex);
-  const codexThreadId = lastCodex?.state === "ok" ? lastCodex.thread?.id || null : null;
-  const codexThread = lastCodex?.state === "ok" ? lastCodex.thread : null;
+  const codexThread = observedCodexThread(cwd);
+  const codexThreadId = codexThread?.id || null;
   const codexUsage = readCodexRolloutTokenUsage(codexThread) || codexTokenWatcher?.latestForThread(codexThreadId) || null;
+  const codexIdentity = readCodexRolloutIdentity(codexThread);
+  const codexModelView: ModelView | undefined =
+    conf.modelEnabled && codexIdentity
+      ? {
+          label: shortCodexModelLabel(codexIdentity.model),
+          state: "actual",
+          effort: codexIdentity.effort,
+        }
+      : undefined;
   const codexContextView = codexContext(codexUsage);
   const codexCacheView = codexCache(codexUsage);
   const codexUsageView = codexUsage
@@ -504,6 +537,7 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
     source: lastCodex?.state === "ok" ? lastCodex.source : null,
     planType,
     userAgent: lastCodex?.state === "ok" ? lastCodex.userAgent : null,
+    model: codexModelView,
     thread: codexThread,
     context: codexContextView,
     contextState,
@@ -537,6 +571,7 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
       source: lastCodex?.state === "ok" ? lastCodex.source : null,
       planType,
       userAgent: lastCodex?.state === "ok" ? lastCodex.userAgent : null,
+      model: codexModelView,
       thread: codexThread,
       context: codexContextView,
       contextState,
@@ -569,6 +604,17 @@ async function tick() {
 
   const { totals, mtimeMs, context, cacheTier, cacheHitRatePct, leadTotals, subagents } = readSessionTotals(cwd);
   const nowSec = Math.floor(Date.now() / 1000);
+  if (conf.provider === "auto") refreshCodexThread(nowSec, conf, cwd);
+
+  const codexThread = observedCodexThread(cwd);
+  const claudeActivityMs = mtimeMs > 0 ? mtimeMs : null;
+  const codexActivityMs = codexThreadActivityMs(codexThread);
+  const nowMs = nowSec * 1000;
+  const fallbackProvider =
+    newestActivityProvider([
+      { provider: "claude", lastActivityMs: claudeActivityMs },
+      { provider: "codex", lastActivityMs: codexActivityMs },
+    ]) || "claude";
 
   const selection = resolveProvider({
     mode: conf.provider,
@@ -578,18 +624,23 @@ async function tick() {
         available: true,
         activity: providerActivity(
           "claude",
-          mtimeMs > 0,
-          mtimeMs > 0 ? mtimeMs : null,
-          mtimeMs > 0 ? "workspace transcript found" : "no workspace transcript"
+          isRecentProviderActivity(claudeActivityMs, nowMs),
+          claudeActivityMs,
+          claudeActivityMs ? "recent workspace transcript" : "no workspace transcript"
         ),
       },
       {
         provider: "codex",
         available: true,
-        activity: providerActivity("codex", false, null, "app-server not connected"),
+        activity: providerActivity(
+          "codex",
+          isRecentProviderActivity(codexActivityMs, nowMs),
+          codexActivityMs,
+          codexActivityMs ? "recent workspace thread" : "no matching thread"
+        ),
       },
     ],
-    fallbackProvider: "claude",
+    fallbackProvider,
   });
   if (selection.kind !== "selected") {
     showProviderNotice(selection, lang);
@@ -831,6 +882,7 @@ export function activate(context: vscode.ExtensionContext) {
       lastFetchSec = 0; // force a quota refresh on manual click
       rateLimitedUntilSec = 0;
       lastCodexFetchSec = 0;
+      lastCodexThreadRefreshSec = 0;
       void tick();
     }),
     vscode.commands.registerCommand("ccStatusbar.toggleQuota", async () => {

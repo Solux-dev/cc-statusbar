@@ -2,6 +2,21 @@ import { emptyTotals, QuotaWindow, Totals } from "./metrics";
 import { CacheView, ContextView } from "./render";
 import { ProviderSnapshot } from "./providerTypes";
 
+export function shortCodexModelLabel(model: string | null | undefined): string | null {
+  const raw = model?.trim();
+  if (!raw) return null;
+  const gpt = /^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/i.exec(raw);
+  if (!gpt) return raw;
+  const suffix = gpt[2]
+    ? ` ${gpt[2]
+        .split("-")
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ")}`
+    : "";
+  return `GPT-${gpt[1]}${suffix}`;
+}
+
 export interface CodexRateLimitWindow {
   usedPercent: number;
   windowDurationMins: number;

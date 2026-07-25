@@ -33,12 +33,19 @@ import {
   pickPlanned,
   shortModelLabel,
 } from "../model";
-import { buildCodexSnapshot, codexContext, codexWindowLabel } from "../codexProvider";
-import { CODEX_NOT_CONNECTED_DETAIL, providerActivity, resolveProvider } from "../providerResolver";
+import { buildCodexSnapshot, codexContext, codexWindowLabel, shortCodexModelLabel } from "../codexProvider";
+import {
+  CODEX_NOT_CONNECTED_DETAIL,
+  isRecentProviderActivity,
+  newestActivityProvider,
+  providerActivity,
+  resolveProvider,
+} from "../providerResolver";
 import {
   buildCodexRequest,
   codexErrorDetail,
   isCodexResponseForId,
+  parseCodexRolloutIdentity,
   parseCodexRolloutTokenUsage,
   parseCodexJsonLines,
   parseCodexTokenUsageNotification,
@@ -434,6 +441,21 @@ test("codexAppServer helpers: parses the latest local Codex rollout token_count"
   assert.equal(usage?.modelContextWindow, 20_000);
 });
 
+test("Codex rollout identity: reads the latest turn model and effort", () => {
+  const raw = [
+    JSON.stringify({ type: "turn_context", payload: { turn_id: "t1", model: "gpt-5.5", effort: "medium" } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "ignored" } }),
+    JSON.stringify({ type: "turn_context", payload: { turn_id: "t2", model: "gpt-5.6-sol", effort: "high" } }),
+  ].join("\n");
+  assert.deepEqual(parseCodexRolloutIdentity(raw), {
+    model: "gpt-5.6-sol",
+    effort: "high",
+    turnId: "t2",
+  });
+  assert.equal(shortCodexModelLabel("gpt-5.6-sol"), "GPT-5.6 Sol");
+  assert.equal(shortCodexModelLabel("custom-model"), "custom-model");
+});
+
 test("buildCodexQuotaView: shows Codex quota without Claude cost lines", () => {
   const now = 1000;
   const v = buildCodexQuotaView(
@@ -468,6 +490,22 @@ test("buildCodexQuotaView: keeps Codex context visible without inventing a perce
   assert.match(v.text, /конт н\/д/);
   assert.match(v.tooltip, /контекст: появится после следующего ответа Codex/);
   assert.ok(!/конт \d+%/.test(v.text), "no context percent without token usage");
+});
+
+test("buildCodexQuotaView/buildCodexPanelHtml: show confirmed Codex model and effort", () => {
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: { pct: 10, resetAt: now + 86400 } };
+  const details = {
+    source: "stdio" as const,
+    model: { label: "GPT-5.6 Sol", state: "actual" as const, effort: "high" },
+  };
+  const view = buildCodexQuotaView(quota, now, "en", details);
+  assert.match(view.text, /^◆ GPT-5\.6 Sol · effort high · Codex/);
+  assert.match(view.tooltip, /model: \*\*GPT-5\.6 Sol\*\* — confirmed by the last turn/);
+  assert.match(view.tooltip, /effort: \*\*high\*\* — confirmed by the last turn/);
+  const html = buildCodexPanelHtml(quota, now, "en", details);
+  assert.match(html, /model: GPT-5\.6 Sol — confirmed by the last turn/);
+  assert.match(html, /effort: high — confirmed by the last turn/);
 });
 
 test("buildCodexPanelHtml: Codex panel is sectioned and user-readable", () => {
@@ -650,6 +688,19 @@ test("providerResolver: auto conflict is representable when both providers are a
   assert.deepEqual(
     result.activities.map((a) => a.provider),
     ["claude", "codex"]
+  );
+});
+
+test("provider activity: stale Claude does not hold Auto; newest source is the idle fallback", () => {
+  const now = 1_000_000;
+  assert.equal(isRecentProviderActivity(now - 30_000, now), true);
+  assert.equal(isRecentProviderActivity(now - 61_000, now), false);
+  assert.equal(
+    newestActivityProvider([
+      { provider: "claude", lastActivityMs: now - 120_000 },
+      { provider: "codex", lastActivityMs: now - 10_000 },
+    ]),
+    "codex"
   );
 });
 

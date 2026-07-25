@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude/Codex Usage — Quota & Context Statusbar",
   "description": "See Claude Code and Codex quota, context, token-equivalent, and cache signals right in the VS Code status bar. Switch between Auto, Claude Code, and Codex from the hover menu.",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -178,7 +178,7 @@
         "ccStatusbar.model.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Claude Code: show which model and effort level the session runs on, at the start of the status-bar line. ◆ = confirmed by the last turn (read from the local transcript). ◇ = planned for a chat that hasn't answered yet (from ANTHROPIC_MODEL or Claude Code's own settings, which its model picker writes). A switch stays highlighted until the next reply. Subagent models never appear here — only the model you are talking to."
+          "description": "Claude Code/Codex: show which model and effort level the session runs on, at the start of the status-bar line. ◆ = confirmed by the last turn (read from the local transcript/rollout). For a new Claude chat, ◇ is the planned model from Claude Code settings until the first reply. Subagent models never replace the lead model shown here."
         },
         "ccStatusbar.subagents.enabled": {
           "type": "boolean",

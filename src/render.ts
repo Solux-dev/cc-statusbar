@@ -224,6 +224,7 @@ export interface CodexQuotaDetails {
   source: "proxy" | "stdio" | null;
   planType?: string | null;
   userAgent?: string | null;
+  model?: ModelView;
   thread?: {
     id: string;
     name: string | null;
@@ -511,10 +512,19 @@ export function buildCodexQuotaView(
   }
 
   const ctxSeg = contextSegment(details.context, m) || (details.contextState === "waiting" ? m.codexContextShortUnavailable : null);
-  const text = segs.length
+  const body = segs.length
     ? `Codex · ${segs.join(" · ")}${ctxSeg ? ` · ${ctxSeg}` : ""}`
     : m.providerUnavailableText("Codex");
+  const identity = [modelSegment(details.model, m), effortSegment(details.model, m)]
+    .filter(Boolean)
+    .join(" · ");
+  const text = identity ? `${identity} · ${body}` : body;
   const t: string[] = [m.codexTitle, ""];
+  const identityLines = [modelLine(details.model, m), effortLine(details.model, m)].filter(Boolean) as string[];
+  if (identityLines.length) {
+    t.push(identityLines.join("  \n"));
+    t.push("", "---", "");
+  }
   t.push(codexUsageCompact(details, m));
   t.push("");
 
@@ -802,6 +812,11 @@ export function buildCodexPanelHtml(
   const economy = codexEconomy(details);
 
   const usageRows: string[] = [];
+  const identityLines = [modelLine(details.model, m), effortLine(details.model, m)].filter(Boolean) as string[];
+  for (const line of identityLines) {
+    usageRows.push(`<div class="ctxrow">${esc(line.replace(/\*\*/g, ""))}</div>`);
+  }
+  if (identityLines.length) usageRows.push(`<div class="sep"></div>`);
   if (economy) {
     usageRows.push(
       `<div class="row big"><span>${esc(m.codexPanelCostLabel)}</span><b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
@@ -888,6 +903,8 @@ export function buildCodexPanelHtml(
   .row .soft, .soft { opacity:.7; font-weight:600; }
   .sub { opacity:.6; font-size:12px; line-height:1.45; padding:2px 0 6px; }
   .ctxrow { padding:6px 0 2px; opacity:.85; font-variant-numeric: tabular-nums; }
+  .sep { width:44%; height:1px; margin:14px 0 12px;
+         background: var(--vscode-panel-border, rgba(128,128,128,.32)); }
   .empty { opacity:.7; font-size:12px; line-height:1.5; padding:6px 0 2px; max-width:720px; }
   .qrow { display:flex; align-items:center; gap:8px; padding:5px 0; }
   .qrow.ctx { padding-bottom:2px; }

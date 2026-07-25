@@ -57,6 +57,12 @@ export interface CodexThreadTokenUsageUpdate {
   tokenUsage: CodexThreadTokenUsageSnapshot;
 }
 
+export interface CodexThreadIdentitySnapshot {
+  model: string;
+  effort: string | null;
+  turnId: string | null;
+}
+
 export interface CodexAppServerOk {
   state: "ok";
   fetchedAtSec: number;
@@ -290,6 +296,22 @@ export function parseCodexRolloutTokenCount(message: unknown): CodexThreadTokenU
   return { total, last, modelContextWindow };
 }
 
+export function parseCodexRolloutIdentityMessage(message: unknown): CodexThreadIdentitySnapshot | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  if (m.type !== "turn_context") return null;
+  const payload = m.payload;
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  const model = stringOrNull(p.model);
+  if (!model) return null;
+  return {
+    model,
+    effort: stringOrNull(p.effort),
+    turnId: stringOrNull(p.turn_id),
+  };
+}
+
 export function parseCodexRolloutTokenUsage(raw: string): CodexThreadTokenUsageSnapshot | null {
   let latest: CodexThreadTokenUsageSnapshot | null = null;
   for (const line of raw.split(/\r?\n/)) {
@@ -304,21 +326,69 @@ export function parseCodexRolloutTokenUsage(raw: string): CodexThreadTokenUsageS
   return latest;
 }
 
-const rolloutUsageCache = new Map<string, { mtimeMs: number; size: number; usage: CodexThreadTokenUsageSnapshot | null }>();
+export function parseCodexRolloutIdentity(raw: string): CodexThreadIdentitySnapshot | null {
+  let latest: CodexThreadIdentitySnapshot | null = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.includes("\"turn_context\"")) continue;
+    try {
+      latest = parseCodexRolloutIdentityMessage(JSON.parse(trimmed)) || latest;
+    } catch {
+      // Ignore partial/corrupt rollout lines; Codex appends JSONL while running.
+    }
+  }
+  return latest;
+}
 
-export function readCodexRolloutTokenUsage(thread: CodexThreadSummary | null | undefined): CodexThreadTokenUsageSnapshot | null {
+interface CodexRolloutCacheEntry {
+  mtimeMs: number;
+  size: number;
+  usage: CodexThreadTokenUsageSnapshot | null;
+  identity: CodexThreadIdentitySnapshot | null;
+}
+
+const rolloutUsageCache = new Map<string, CodexRolloutCacheEntry>();
+
+function readCodexRollout(thread: CodexThreadSummary | null | undefined): CodexRolloutCacheEntry | null {
   const filePath = thread?.path;
   if (!filePath) return null;
   try {
     const st = fs.statSync(filePath);
     if (!st.isFile()) return null;
     const cached = rolloutUsageCache.get(filePath);
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.usage;
-    const usage = parseCodexRolloutTokenUsage(fs.readFileSync(filePath, "utf8"));
-    rolloutUsageCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, usage });
-    return usage;
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached;
+    const raw = fs.readFileSync(filePath, "utf8");
+    const entry = {
+      mtimeMs: st.mtimeMs,
+      size: st.size,
+      usage: parseCodexRolloutTokenUsage(raw),
+      identity: parseCodexRolloutIdentity(raw),
+    };
+    rolloutUsageCache.set(filePath, entry);
+    return entry;
   } catch {
     return null;
+  }
+}
+
+export function readCodexRolloutTokenUsage(thread: CodexThreadSummary | null | undefined): CodexThreadTokenUsageSnapshot | null {
+  return readCodexRollout(thread)?.usage || null;
+}
+
+export function readCodexRolloutIdentity(thread: CodexThreadSummary | null | undefined): CodexThreadIdentitySnapshot | null {
+  return readCodexRollout(thread)?.identity || null;
+}
+
+export function codexThreadActivityMs(thread: CodexThreadSummary | null | undefined): number | null {
+  const listed = thread?.updatedAtSec != null ? thread.updatedAtSec * 1000 : null;
+  const filePath = thread?.path;
+  if (!filePath) return listed;
+  try {
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) return listed;
+    return listed == null ? st.mtimeMs : Math.max(listed, st.mtimeMs);
+  } catch {
+    return listed;
   }
 }
 
@@ -475,6 +545,8 @@ export class CodexTokenUsageWatcher {
   private commandKey = "";
   private starting = false;
   private usageByThread = new Map<string, CodexThreadTokenUsageUpdate>();
+  private threadByWorkspace = new Map<string, CodexThreadSummary>();
+  private threadRefreshInFlight = new Set<string>();
   private diagnostics: string[] = [];
 
   constructor(private readonly onUpdate?: () => void) {}
@@ -492,6 +564,31 @@ export class CodexTokenUsageWatcher {
   latestForThread(threadId: string | null | undefined): CodexThreadTokenUsageSnapshot | null {
     if (!threadId) return null;
     return this.usageByThread.get(threadId)?.tokenUsage || null;
+  }
+
+  isReady(): boolean {
+    return !!this.client && !this.client.isClosed();
+  }
+
+  latestThread(workspacePath: string): CodexThreadSummary | null {
+    return this.threadByWorkspace.get(path.normalize(workspacePath).toLowerCase()) || null;
+  }
+
+  async refreshThread(workspacePath: string, timeoutMs = 5000): Promise<CodexThreadSummary | null> {
+    const key = path.normalize(workspacePath).toLowerCase();
+    if (!this.client || this.client.isClosed() || this.threadRefreshInFlight.has(key)) {
+      return this.latestThread(workspacePath);
+    }
+    this.threadRefreshInFlight.add(key);
+    try {
+      const diagnostics: string[] = [];
+      const thread = await readThreadSummary(this.client, workspacePath, timeoutMs, diagnostics);
+      if (thread) this.threadByWorkspace.set(key, thread);
+      if (diagnostics.length) this.diagnostics.push(...diagnostics);
+      return thread;
+    } finally {
+      this.threadRefreshInFlight.delete(key);
+    }
   }
 
   diagnosticLines(): string[] {
@@ -557,6 +654,7 @@ export class CodexTokenUsageWatcher {
     this.client = client;
     this.starting = false;
     this.diagnostics.push(`token usage watcher: ${source}`);
+    this.onUpdate?.();
   }
 }
 

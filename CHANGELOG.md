@@ -3,6 +3,24 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.21] — 2026-07-25
+
+### Added
+
+- Codex now shows the confirmed lead model and reasoning effort at the start of
+  the status-bar line, tooltip, and panel. Both values come from the local
+  rollout `turn_context`, so the feature adds no network request or token cost.
+
+### Fixed
+
+- `Auto` could never select Codex: the resolver treated every historical Claude
+  transcript as permanently active while hard-coding Codex as inactive until it
+  had already been selected manually. Auto now refreshes the matching Codex
+  thread through the persistent local app-server connection, treats only the
+  last minute as live activity, and keeps the most recently active provider as
+  the idle fallback. Two genuinely live providers still produce the explicit
+  conflict state.
+
 ## [1.0.20] — 2026-07-25
 
 ### Added
