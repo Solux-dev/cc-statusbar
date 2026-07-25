@@ -10,6 +10,7 @@ import {
   Totals,
   Weights,
   QuotaWindow,
+  ScopedQuotaWindow,
   PaceLevel,
   effectiveTokens,
   fmtTokens,
@@ -30,8 +31,19 @@ export interface QuotaView {
   /** Unix seconds the shown reading was obtained (network fetch or local
    *  statusline bridge write). Drives the "updated N ago" freshness note. */
   asOfSec?: number;
-  /** Which source the shown reading came from (for the panel/diagnostics). */
-  source?: "network" | "local";
+  /** Which source the shown reading came from (for the panel/diagnostics):
+   *  "usage" = our own GET of the account's usage payload (free, carries every
+   *  window), "network" = the rate-limit header poll, "local" = a file written
+   *  by Claude Code itself (statusLine bridge or its usage cache). */
+  source?: "network" | "local" | "usage";
+  /** Per-model weekly windows (today: Fable). Deliberately tooltip/panel-only —
+   *  they answer "can I still run THIS model this week?", a question you ask
+   *  before switching models, not something the collapsed bar must carry. They
+   *  come from a THIRD source with its own clock, hence their own asOf. */
+  scoped?: ScopedQuotaWindow[];
+  /** Unix seconds the scoped windows were read from the server. 0/undefined =
+   *  unknown → treated as too old to show. */
+  scopedAsOfSec?: number;
 }
 
 /** Context-window fill for the active (Lead) session. `usedTokens` = the real
@@ -339,6 +351,41 @@ function dot(level: PaceLevel): string {
  *  never trips it, but short enough that a stuck poll flips to honest-offline. */
 const QUOTA_FRESH_SECONDS = 6 * 60;
 
+/** A per-model weekly reading older than this stops being presented as current:
+ *  the row keeps its %, but states its age inline. Comfortably above the ~5-min
+ *  write throttle of the cache we read, so a normally-refreshed value reads
+ *  clean and only a genuinely old one is flagged. */
+const SCOPED_AGE_NOTE_SECONDS = 15 * 60;
+
+/** Beyond this the row is dropped entirely. A weekly % moves slowly, so a few
+ *  hours old is still worth showing WITH its age — but a day-old value can be
+ *  wrong by a whole working day, and showing nothing is the honest answer. */
+const SCOPED_MAX_AGE_SECONDS = 24 * 3600;
+
+/** Scoped windows that are recent enough to show, plus their age. Unknown age
+ *  counts as too old (we never present an undated reading as current). Pure. */
+function shownScoped(quota: QuotaView, nowSec: number): { windows: ScopedQuotaWindow[]; ageSec: number } {
+  const windows = quota.scoped || [];
+  if (!windows.length) return { windows: [], ageSec: 0 };
+  const asOf = quota.scopedAsOfSec || 0;
+  const ageSec = asOf > 0 ? Math.max(0, nowSec - asOf) : Infinity;
+  if (ageSec > SCOPED_MAX_AGE_SECONDS) return { windows: [], ageSec: 0 };
+  return { windows, ageSec };
+}
+
+/** Tooltip bullets for the per-model weekly windows — same shape as the 5h/7d
+ *  bullets so the block reads as one list, with the age carried INLINE (a
+ *  separate note under the list would be read as applying to all rows). */
+function scopedTooltipLines(quota: QuotaView, nowSec: number, m: Messages): string[] {
+  const { windows, ageSec } = shownScoped(quota, nowSec);
+  const age = ageSec >= SCOPED_AGE_NOTE_SECONDS ? m.quotaScopedAge(fmtRemaining(ageSec, m.units)) : "";
+  return windows.map((w) => {
+    const p = paceLevel(w.pct, w.resetAt, nowSec, WINDOW_7D_SECONDS);
+    const reset = w.resetAt ? m.quotaReset(fmtRemaining(w.resetAt - nowSec, m.units)) : "";
+    return `- ${dot(p)} ${m.scopedLabel(w.label)} ${bar(w.pct)} **${w.pct.toFixed(0)}%** ${m.verdict[p]}${reset}${age}`;
+  });
+}
+
 export function buildView(
   totals: Totals,
   weights: Weights,
@@ -440,10 +487,14 @@ export function buildView(
     return `- ${dot(p)} ${label} ${bar(w.pct)} **${w.pct.toFixed(0)}%** ${m.verdict[p]}${reset}`;
   };
 
+  // Per-model weekly windows come from their OWN source, so they survive a dead
+  // 5h/7d poll — and are worth showing exactly then.
+  const scopedLines = scopedTooltipLines(quota, nowSec, m);
   if (quota.state === "ok") {
     t.push(m.tariffHeader);
     t.push(quotaLine(m.w5h, quota.fiveH, WINDOW_5H_SECONDS));
     t.push(quotaLine(m.w7d, quota.sevenD, WINDOW_7D_SECONDS));
+    t.push(...scopedLines);
     // Honest freshness: if the shown reading isn't brand-new (a poll that hasn't
     // refreshed yet, or a local-bridge value while the link is down), say how
     // old it is — the % stays visible, never silently dropped.
@@ -456,6 +507,11 @@ export function buildView(
   } else {
     t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
     t.push(m.localAlwaysAccurate);
+    if (scopedLines.length) {
+      t.push("");
+      t.push(m.tariffHeader);
+      t.push(...scopedLines);
+    }
   }
   // "This session" facts answer a different question from the tariff (which is
   // about the subscription), so they get their own labelled group instead of
@@ -599,9 +655,18 @@ export function buildPanelHtml(
   rows.push(`<div class="sub">${esc(m.panelTokenCostNote)}</div>`);
 
   const quotaBlock: string[] = [];
-  const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
+  const windowRow = (
+    label: string,
+    w: QuotaWindow | null,
+    windowSec: number,
+    // extras used only by the per-model rows: an inline age suffix and a hover
+    // footnote explaining what a model-scoped weekly window is.
+    suffix = "",
+    hint = ""
+  ): void => {
+    const title = hint ? ` title="${esc(hint)}"` : "";
     if (!w) {
-      quotaBlock.push(`<div class="qrow"><span class="qlabel">${esc(label)}</span><span>—</span></div>`);
+      quotaBlock.push(`<div class="qrow"${title}><span class="qlabel">${esc(label)}</span><span>—</span></div>`);
       return;
     }
     const lvl = paceLevel(w.pct, w.resetAt, nowSec, windowSec);
@@ -609,14 +674,26 @@ export function buildPanelHtml(
     const pct = Math.max(0, Math.min(100, w.pct));
     const reset = w.resetAt ? esc(m.quotaReset(fmtRemaining(w.resetAt - nowSec, m.units))) : "";
     quotaBlock.push(
-      `<div class="qrow">` +
+      `<div class="qrow"${title}>` +
         `<span class="dot" style="background:${color}"></span>` +
         `<span class="qlabel">${esc(label)}</span>` +
         `<span class="bar"><i style="width:${pct.toFixed(0)}%;background:${color}"></i></span>` +
         `<b>${w.pct.toFixed(0)}%</b>` +
-        `<span class="verdict">${esc(m.verdict[lvl])}${reset}</span>` +
+        `<span class="verdict">${esc(m.verdict[lvl])}${reset}${esc(suffix)}</span>` +
         `</div>`
     );
+  };
+
+  // Per-model weekly rows (today: Fable). Their own source and their own clock,
+  // so they render in BOTH branches below — a dead 5h/7d poll must not hide a
+  // number that is still perfectly valid.
+  const scoped = shownScoped(quota, nowSec);
+  const scopedRows = (): void => {
+    const suffix =
+      scoped.ageSec >= SCOPED_AGE_NOTE_SECONDS ? m.quotaScopedAge(fmtRemaining(scoped.ageSec, m.units)) : "";
+    for (const w of scoped.windows) {
+      windowRow(m.scopedLabel(w.label), w, WINDOW_7D_SECONDS, suffix, m.panelScopedHint);
+    }
   };
 
   // context-window fill — its own line right under the tariff (see spec).
@@ -632,6 +709,7 @@ export function buildPanelHtml(
   if (quota.state === "ok" && fresh) {
     windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
+    scopedRows();
     quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}${ctxRow}`;
   } else {
     const reason = quota.state === "ok" ? m.quotaStateMsg.error : m.quotaStateMsg[quota.state];
@@ -645,10 +723,12 @@ export function buildPanelHtml(
     }
     // Keep the heading in the offline branch too: without it the panel opened
     // with a bare "temporarily unavailable", giving no clue WHAT is unavailable.
+    scopedRows(); // independent source — still valid while 5h/7d is down
     quotaSection =
       `<h3>${esc(m.panelQuotaHeader)}</h3>` +
       `<p class="muted">${esc(reason)}</p>` +
       lastKnown +
+      quotaBlock.join("") +
       `<p class="muted">${esc(m.panelLocalAccurate)}</p>` +
       ctxRow;
   }

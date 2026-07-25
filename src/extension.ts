@@ -5,7 +5,17 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { readSessionTotals, SubagentInfo } from "./transcript";
-import { fetchQuota, fetchModelWindow, shouldPoll, FAIL_RETRY_SEC, QuotaResult, ModelWindowResult } from "./quota";
+import {
+  fetchQuota,
+  fetchUsage,
+  fetchModelWindow,
+  shouldPoll,
+  usageCoversQuota,
+  FAIL_RETRY_SEC,
+  QuotaResult,
+  UsageResult,
+  ModelWindowResult,
+} from "./quota";
 import {
   buildView,
   buildPanelHtml,
@@ -18,8 +28,9 @@ import {
   SubagentView,
   choicesMarkdown,
 } from "./render";
-import { Weights, ContextInfo, QuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
+import { Weights, ContextInfo, QuotaWindow, ScopedQuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
 import { readLocalQuota } from "./localQuota";
+import { readCachedUsage } from "./usage";
 import { isRealModelId, readOpenChats, readPlannedEffort, readPlannedModel, shortModelLabel } from "./model";
 import { resolveLang, messages, Lang, LangSetting } from "./i18n";
 import { ProviderMode, ProviderSelection, UsageProviderKind } from "./providerTypes";
@@ -80,9 +91,24 @@ interface GoodQuota {
   fiveH: QuotaWindow | null;
   sevenD: QuotaWindow | null;
   atSec: number;
-  source: "network" | "local";
+  source: "network" | "local" | "usage";
 }
 let lastGoodQuota: GoodQuota | null = null;
+
+// ── usage payload (GET /api/oauth/usage) — the ONLY live source of the
+// per-model weekly windows (Fable), and a free superset of the header poll:
+// zero tokens, every window in one request. Shares the header poll's gate, so a
+// manual click refreshes Fable too. On any failure we fall straight back to the
+// header poll + the on-disk cache, which is why nothing here can regress.
+let lastUsage: UsageResult | null = null;
+/** Gate timestamp, separate from lastUsage.fetchedAtSec: a manual click zeroes
+ *  THIS to force a re-ask, while the real fetch time keeps telling us whether
+ *  the payload is currently covering the header poll. */
+let lastUsageFetchSec = 0;
+let usageInFlight = false;
+/** Windows last seen from the LIVE payload, kept across ticks so a momentary
+ *  failure doesn't blank the Fable row (the renderer states their age). */
+let lastGoodUsage: { scoped: ScopedQuotaWindow[]; atSec: number } | null = null;
 
 let lastCodex: CodexAppServerResult | null = null;
 let lastCodexFetchSec = 0;
@@ -659,9 +685,46 @@ async function tick() {
   if (!conf.quotaEnabled) {
     quotaView = { fiveH: null, sevenD: null, state: "disabled" };
   } else {
-    // ── Source 1: network poll — UNCHANGED. Same throttle, activity gate,
-    // timeouts, and retries as before. We do not weaken or remove it; it keeps
-    // updating lastQuota exactly as today (the no-regression guarantee).
+    // ── Source 0: the usage payload — the ONLY live source of the per-model
+    // weekly windows (Fable), and a free superset of the header poll below.
+    // Same gate as that poll (throttle + activity + 429 backoff) and the same
+    // `lastFetchSec` reset on a manual click, so one click refreshes Fable too.
+    const usageThrottleSec = lastUsage?.state === "error" ? Math.min(conf.minPollSeconds, FAIL_RETRY_SEC) : conf.minPollSeconds;
+    if (
+      !usageInFlight &&
+      shouldPoll(lastUsageFetchSec, nowSec, usageThrottleSec, mtimeMs, rateLimitedUntilSec, conf.minPollSeconds)
+    ) {
+      usageInFlight = true;
+      lastUsageFetchSec = nowSec;
+      fetchUsage(conf.credentialsPath, nowSec)
+        .then((r) => {
+          lastUsage = r;
+          lastUsageFetchSec = r.fetchedAtSec;
+          if (r.state === "rate-limited") {
+            const retry = Number(r.detail) || 60;
+            rateLimitedUntilSec = nowSec + Math.max(retry, conf.minPollSeconds);
+          }
+          // Keep the last GOOD scoped reading: a momentary failure must not blank
+          // a row whose number is still perfectly usable (its age is shown).
+          if (r.state === "ok" && r.scoped.length) {
+            lastGoodUsage = { scoped: r.scoped, atSec: r.fetchedAtSec };
+            void extCtx?.globalState.update("lastGoodUsage", lastGoodUsage);
+          }
+          if (r.state !== "ok") {
+            logDiagnostics("Claude usage", [`state: ${r.state}`, r.detail ? `detail: ${r.detail}` : ""]);
+          }
+        })
+        .finally(() => {
+          usageInFlight = false;
+        });
+    }
+
+    // ── Source 1: header poll — UNCHANGED in mechanics (same throttle, activity
+    // gate, timeouts, retries) and still the safety net. It is SKIPPED only
+    // while the free payload above is demonstrably doing its job — i.e. it
+    // answered within the last interval WITH 5h/7d — because it costs ~1 token
+    // per poll to learn the very same two numbers. The moment the payload route
+    // fails or stops carrying them, this poll resumes by itself.
     // Throttle: normally minPollSeconds, but only FAIL_RETRY_SEC after a failed
     // poll so a flaky link recovers fast. The activity window stays at the
     // normal interval (a short retry gap must not shrink "is the user active?").
@@ -670,6 +733,7 @@ async function tick() {
       : conf.minPollSeconds;
     if (
       !inFlight &&
+      !usageCoversQuota(lastUsage, nowSec, conf.minPollSeconds * 2) &&
       shouldPoll(lastFetchSec, nowSec, throttleSec, mtimeMs, rateLimitedUntilSec, conf.minPollSeconds)
     ) {
       inFlight = true;
@@ -702,15 +766,28 @@ async function tick() {
     // on links too weak for our own poll to complete.
     const local = readLocalQuota();
 
+    // ── Source 3: Claude Code's own on-disk usage cache — zero network. Only a
+    // FALLBACK now that we fetch the payload ourselves: it is refilled when the
+    // CLI happens to fetch usage, so it can be hours old. It still earns its
+    // place — it covers the first tick after a reload and any moment our request
+    // cannot get through.
+    const cached = readCachedUsage();
+
     // ── Merge: freshest valid reading wins, then persist as last-known. Strict
     // ">" so a tie never flip-flops; the network reading is preferred when it is
     // at least as fresh, the local one when it is newer.
     const candidates: GoodQuota[] = [];
+    if (lastUsage?.state === "ok" && (lastUsage.fiveH || lastUsage.sevenD)) {
+      candidates.push({ fiveH: lastUsage.fiveH, sevenD: lastUsage.sevenD, atSec: lastUsage.fetchedAtSec, source: "usage" });
+    }
     if (lastQuota?.state === "ok" && (lastQuota.fiveH || lastQuota.sevenD)) {
       candidates.push({ fiveH: lastQuota.fiveH, sevenD: lastQuota.sevenD, atSec: lastQuota.fetchedAtSec, source: "network" });
     }
     if (local.ok) {
       candidates.push({ fiveH: local.fiveH, sevenD: local.sevenD, atSec: local.writtenAtSec, source: "local" });
+    }
+    if (cached.ok && (cached.fiveH || cached.sevenD)) {
+      candidates.push({ fiveH: cached.fiveH, sevenD: cached.sevenD, atSec: cached.fetchedAtSec, source: "local" });
     }
     let refreshed = false;
     for (const c of candidates) {
@@ -737,6 +814,17 @@ async function tick() {
       quotaView = lastQuota
         ? { fiveH: lastQuota.fiveH, sevenD: lastQuota.sevenD, state: lastQuota.state }
         : { fiveH: null, sevenD: null, state: "error" };
+    }
+    // Per-model weekly windows are ADDITIVE — never merged into 5h/7d, and they
+    // carry their own clock because their sources refresh on different
+    // schedules. Freshest of {live payload, CLI's cache} wins.
+    const scopedCandidates: Array<{ scoped: ScopedQuotaWindow[]; atSec: number }> = [];
+    if (lastGoodUsage) scopedCandidates.push(lastGoodUsage);
+    if (cached.ok && cached.scoped.length) scopedCandidates.push({ scoped: cached.scoped, atSec: cached.fetchedAtSec });
+    const bestScoped = scopedCandidates.sort((a, b) => b.atSec - a.atSec)[0];
+    if (bestScoped) {
+      quotaView.scoped = bestScoped.scoped;
+      quotaView.scopedAsOfSec = bestScoped.atSec;
     }
   }
 
@@ -872,6 +960,8 @@ export function activate(context: vscode.ExtensionContext) {
   try {
     const g = context.globalState.get<GoodQuota>("lastGoodQuota");
     if (g && typeof g.atSec === "number" && (g.fiveH || g.sevenD)) lastGoodQuota = g;
+    const u = context.globalState.get<{ scoped: ScopedQuotaWindow[]; atSec: number }>("lastGoodUsage");
+    if (u && typeof u.atSec === "number" && Array.isArray(u.scoped) && u.scoped.length) lastGoodUsage = u;
   } catch {
     /* fine — falls back to fetching fresh */
   }
@@ -880,6 +970,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("ccStatusbar.refresh", () => {
       lastFetchSec = 0; // force a quota refresh on manual click
+      // ...including the per-model weekly windows: clearing the payload's gate
+      // is what makes a click actually re-ask for the Fable number instead of
+      // re-showing the last one.
+      lastUsageFetchSec = 0;
       rateLimitedUntilSec = 0;
       lastCodexFetchSec = 0;
       lastCodexThreadRefreshSec = 0;

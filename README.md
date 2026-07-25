@@ -119,6 +119,12 @@ Hover for the full breakdown (tooltip):
   and a plain-language verdict (`on track` / `running tight` / `over pace`) —
   the **whole item turns yellow/red** when the current burn pace risks
   exceeding a window.
+- **per-model weekly windows** (today `Fable (7d)`) — a model that is capped at
+  a *share* of the weekly allowance runs out at its own pace, so it gets its own
+  row: `🔴 Fable (7d) ▓▓▓▓▓▓▓░ 91% over pace · resets in 2d18h`. Tooltip and
+  panel only — the collapsed line stays 5h/7d. Rows appear by themselves for any
+  model the server scopes (no hardcoded model list), and carry their age when
+  the reading is not live.
 - **context** — how full the model's window is now, as a full line
   `context: 47% (468k / 1M)`. For Claude Code the limit is read once per model
   from the Anthropic Models API
@@ -249,10 +255,19 @@ _По умолчанию язык берётся из языка редакто�
 - **Tokens / token-equivalent / cache** — parsed from the **local** transcript
   `~/.claude/projects/<slug>/<session>.jsonl` (+ its `subagents/`). No network,
   **zero token cost**, independent of Anthropic auth.
-- **Real 5h/7d quota** — read from **two independent sources**, merged so the
-  **freshest valid reading wins** (and once either has ever succeeded the line
-  is never blank again):
-  1. **Passive local bridge — zero network, zero token cost.** The companion
+- **Real quota — 5h, 7d, and the per-model weekly windows** — read from **four
+  independent sources**, merged so the **freshest valid reading wins** (and once
+  any of them has ever succeeded the line is never blank again):
+  1. **The account's usage payload — zero token cost, every window at once.**
+     `GET /api/oauth/usage`, the route Claude Code itself calls for its `/usage`
+     view, using your existing local OAuth token. A plain read: no message is
+     generated, so it costs **nothing**, and it is the **only** channel that
+     carries the per-model weekly windows (Fable). Same throttle as the poll
+     below — at most once per `quota.minPollSeconds` (default 300s), only while
+     the session is active, plus a manual refresh when you click the item.
+     Undocumented route → isolated in `src/quota.ts` + `src/usage.ts`; on any
+     failure the sources below take over unchanged.
+  2. **Passive local bridge — zero network, zero token cost.** The companion
      `statusline.py` mirrors the `rate_limits` that Claude Code already hands to
      its **statusLine hook** into `~/.claude/.cc-statusbar-quota.json`; the
      extension just reads that file. This is the **same real server data Claude
@@ -263,19 +278,26 @@ _По умолчанию язык берётся из языка редакто�
      and the network poll below is what keeps the limits current there. Works on
      **Windows, macOS, and Linux** (it rides the official statusLine contract,
      not any OS-specific keychain or in-process traffic interception).
-  2. **Network poll — resilient fallback.** A tiny throttled request to
-     Anthropic reads the `anthropic-ratelimit-unified-*` response headers (uses
-     your existing local OAuth token). **~a few tokens per poll**, at most once
-     per `quota.minPollSeconds` (default 300s) and **only while the session is
-     active**. This is the **zero-setup** path: it works even if you have not
-     wired up the statusLine bridge.
+  3. **Header poll — the safety net.** A tiny throttled request whose
+     `anthropic-ratelimit-unified-*` response headers carry 5h/7d. Costs **~1
+     token per poll**, so it is **skipped entirely while source 1 is delivering
+     those two windows** — and resumes by itself the moment that route fails or
+     stops carrying them.
+  4. **Claude Code's own on-disk copy — zero network.** The CLI persists the
+     same usage payload in `~/.claude.json` (`cachedUsageUtilization`). Read as
+     a last resort: it covers the first tick after a reload and any moment our
+     own request cannot get through. It is refilled when the CLI happens to
+     fetch usage, **not on a timer**, so it can be hours old — which is why a
+     per-model row older than 15 min states its age and one older than 24h is
+     hidden rather than presented as current.
 
-  Why two? Deliberate redundancy and coverage. The local bridge gives a
-  passive, zero-network reading wherever the statusLine hook runs; the network
-  poll guarantees a reading with no setup at all. Together they stay accurate on
-  flaky links, in the terminal, and in the editor — across all three OSes.
-  Quota can be turned off entirely (`ccStatusbar.quota.enabled: false`) — then
-  only the free local metrics show.
+  Why four? Deliberate redundancy and coverage. The payload gives every window
+  live and free; the bridge gives a passive reading wherever the statusLine hook
+  runs; the header poll guarantees 5h/7d even if the payload route ever changes;
+  the on-disk copy covers cold starts and dead links. Together they stay
+  accurate on flaky links, in the terminal, and in the editor — across all three
+  OSes. Quota can be turned off entirely (`ccStatusbar.quota.enabled: false`) —
+  then only the free local metrics show.
 - **Context limit** — read once per model from the Anthropic Models API
   (`max_input_tokens`, cached 24h). If it cannot be fetched, the `%` is hidden
   instead of guessed.
@@ -337,7 +359,8 @@ No telemetry, no extension-owned server, and no analytics.
   Codex/OpenAI login that Codex already has. Local Codex session files are read
   only for token counters.
 
-The code is small and MIT-licensed — read `src/quota.ts` (network poll),
+The code is small and MIT-licensed — read `src/quota.ts` (the two network
+requests), `src/usage.ts` (usage-payload shapes + the on-disk copy),
 `src/localQuota.ts` (passive statusLine bridge), `src/transcript.ts`, and
 `src/codexAppServer.ts` to verify.
 
@@ -369,7 +392,7 @@ Reload VS Code. The item appears on the right of the status bar.
 | `alignment` | `right` | Status-bar side |
 | `cacheReadWeight` | `0.1` | weight for cache read in the cache-weighted cost |
 | `cacheWriteWeight` | `1.25` | weight for cache write in the cache-weighted cost |
-| `quota.enabled` | `true` | Fetch real 5h/7d quota (costs ~tokens) |
+| `quota.enabled` | `true` | Fetch real quota — 5h/7d + per-model weekly (free in the steady state) |
 | `quota.minPollSeconds` | `300` | Min seconds between quota calls |
 | `credentialsPath` | `""` | Override credentials file location |
 | `codex.commandPath` | `""` | Optional Codex CLI path; empty = auto-detect OpenAI/ChatGPT VS Code extension, npm global install, or PATH |

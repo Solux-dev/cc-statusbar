@@ -18,8 +18,16 @@ import {
 } from "../metrics";
 import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown } from "../render";
 import { parseLocalQuota, windowFromBridge } from "../localQuota";
+import {
+  parseCachedUsage,
+  parseUsageBody,
+  hasUsageWindows,
+  scopedWindowFromLimit,
+  windowFromUsage,
+  toUnixSec,
+} from "../usage";
 import { resolveLang, messages } from "../i18n";
-import { attemptTimeoutsMs, isRetryableStatus, shouldPoll, FAIL_RETRY_SEC } from "../quota";
+import { attemptTimeoutsMs, isRetryableStatus, shouldPoll, usageCoversQuota, FAIL_RETRY_SEC } from "../quota";
 import { projectSlug } from "../transcript";
 import {
   deriveLabel,
@@ -825,6 +833,187 @@ test("localQuota: parseLocalQuota reads the statusline bridge payload", () => {
 test("localQuota: parseLocalQuota fails safe on junk / missing windows", () => {
   assert.equal(parseLocalQuota("not json").ok, false);
   assert.equal(parseLocalQuota(JSON.stringify({ writtenAtSec: 1, rate_limits: {} })).ok, false);
+});
+
+// ── the usage payload: 5h/7d + per-model weekly windows (Fable) ──────────────
+
+/** VERBATIM shape of the live GET /api/oauth/usage body (verified 2026-07-26),
+ *  which is also what Claude Code persists in ~/.claude.json. Only the
+ *  `weekly_scoped` rows are per-model. */
+const USAGE_BODY = {
+  five_hour: { utilization: 3, resets_at: "2026-07-25T22:40:01.007784+00:00", limit_dollars: null },
+  seven_day: { utilization: 73, resets_at: "2026-07-28T13:00:01.007829+00:00", limit_dollars: null },
+  seven_day_opus: null,
+  seven_day_sonnet: null,
+  extra_usage: { is_enabled: false },
+  limits: [
+    { kind: "session", group: "session", percent: 3, resets_at: "2026-07-25T22:40:01Z", scope: null },
+    { kind: "weekly_all", group: "weekly", percent: 73, resets_at: "2026-07-28T13:00:01Z", scope: null },
+    {
+      kind: "weekly_scoped",
+      group: "weekly",
+      percent: 91,
+      severity: "critical",
+      resets_at: "2026-07-28T13:00:01.008052+00:00",
+      scope: { model: { id: null, display_name: "Fable" }, surface: null },
+      is_active: true,
+    },
+  ],
+};
+
+/** The same body as the CLI caches it: wrapped with its fetch timestamp. */
+const USAGE_CACHE = JSON.stringify({
+  cachedUsageUtilization: { fetchedAtMs: 1_784_987_462_966, accountUuid: "acc-1", utilization: USAGE_BODY },
+});
+
+test("usage: parseUsageBody reads 5h, 7d and ONLY the model-scoped weekly rows", () => {
+  const u = parseUsageBody(USAGE_BODY);
+  assert.equal(u.fiveH?.pct, 3);
+  assert.equal(u.sevenD?.pct, 73);
+  assert.equal(u.fiveH?.resetAt, Math.round(Date.parse("2026-07-25T22:40:01.007784+00:00") / 1000));
+  assert.equal(u.scoped.length, 1); // session / weekly_all are NOT model-scoped
+  assert.equal(u.scoped[0].label, "Fable");
+  assert.equal(u.scoped[0].pct, 91);
+  assert.equal(u.scoped[0].resetAt, Math.round(Date.parse("2026-07-28T13:00:01.008052+00:00") / 1000));
+});
+
+test("usage: an unreadable payload yields nothing rather than a guessed 0%", () => {
+  assert.equal(hasUsageWindows(parseUsageBody(null)), false);
+  assert.equal(hasUsageWindows(parseUsageBody({})), false);
+  assert.equal(hasUsageWindows(parseUsageBody({ limits: "not an array" })), false);
+  // a window whose percentage is missing is hidden, not zeroed
+  assert.equal(windowFromUsage({ resets_at: "2026-07-28T13:00:00Z" }), null);
+  assert.equal(windowFromUsage(null), null);
+  assert.deepEqual(windowFromUsage({ utilization: 0 }), { pct: 0, resetAt: null });
+});
+
+test("usage: parseCachedUsage unwraps the CLI's on-disk copy with its fetch time", () => {
+  const r = parseCachedUsage(USAGE_CACHE);
+  assert.equal(r.ok, true);
+  assert.equal(r.fetchedAtSec, 1_784_987_463); // ms → s, rounded
+  assert.equal(r.sevenD?.pct, 73);
+  assert.equal(r.scoped[0].label, "Fable");
+});
+
+test("usage: parseCachedUsage fails safe on junk, a missing cache, or a new shape", () => {
+  assert.equal(parseCachedUsage("not json").ok, false);
+  assert.equal(parseCachedUsage("{}").ok, false); // no cachedUsageUtilization (older CLI)
+  assert.equal(parseCachedUsage(JSON.stringify({ cachedUsageUtilization: { utilization: {} } })).ok, false);
+});
+
+test("usage: a nameless or percent-less row is dropped, never shown as 0%", () => {
+  const base = { kind: "weekly_scoped", percent: 50, scope: { model: { display_name: "Fable" } } };
+  assert.equal(scopedWindowFromLimit(base)?.pct, 50);
+  assert.equal(scopedWindowFromLimit({ ...base, percent: null }), null);
+  assert.equal(scopedWindowFromLimit({ ...base, scope: { model: {} } }), null);
+  assert.equal(scopedWindowFromLimit({ ...base, kind: "weekly_all" }), null);
+  assert.equal(scopedWindowFromLimit(null), null);
+  // reset is optional — a window without one is still usable
+  assert.equal(scopedWindowFromLimit(base)?.resetAt, null);
+});
+
+test("usage: toUnixSec accepts the ISO strings limits[] uses and raw seconds", () => {
+  assert.equal(toUnixSec("2026-07-28T13:00:00Z"), 1785243600);
+  assert.equal(toUnixSec(1785243600), 1785243600);
+  assert.equal(toUnixSec("not a date"), null);
+  assert.equal(toUnixSec("" as any), null);
+  assert.equal(toUnixSec(null), null);
+});
+
+test("usageCoversQuota: the paid header poll is skipped ONLY while the free one delivers", () => {
+  const now = 1_000_000;
+  const ok = { ...parseUsageBody(USAGE_BODY), fetchedAtSec: now - 60, state: "ok" as const };
+  // fresh payload carrying 5h/7d → the 1-token poll is redundant
+  assert.equal(usageCoversQuota(ok, now, 600), true);
+  // ...but it resumes the moment the payload is stale, failed, or windowless
+  assert.equal(usageCoversQuota({ ...ok, fetchedAtSec: now - 900 }, now, 600), false);
+  assert.equal(usageCoversQuota({ ...ok, state: "error" }, now, 600), false);
+  assert.equal(usageCoversQuota({ ...ok, fiveH: null, sevenD: null }, now, 600), false);
+  // a payload that only carried the Fable row must NOT suppress the poll:
+  // 5h/7d would silently stop updating
+  assert.equal(usageCoversQuota({ ...ok, fiveH: null, sevenD: null, scoped: ok.scoped }, now, 600), false);
+  assert.equal(usageCoversQuota(null, now, 600), false);
+});
+
+test("buildView: the Fable weekly row lands in the tooltip and NEVER in the bar", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const q = {
+    state: "ok" as const,
+    fiveH: { pct: 7, resetAt: now + WINDOW_5H_SECONDS },
+    sevenD: { pct: 67, resetAt: now + 7 * 86400 },
+    asOfSec: now - 5,
+    scoped: [{ label: "Fable", pct: 82, resetAt: now + 2 * 86400 }],
+    scopedAsOfSec: now - 60,
+  };
+  const en = buildView(totals, W, q, now, "en");
+  assert.match(en.tooltip, /Fable \(7d\).*82%/);
+  assert.doesNotMatch(en.text, /Fable/); // collapsed bar stays tariff-only
+  assert.doesNotMatch(en.text, /82%/);
+  // a per-model window must not tint the item either — it is informational here
+  assert.equal(en.level, "normal");
+  const ru = buildView(totals, W, q, now, "ru");
+  assert.match(ru.tooltip, /Fable \(7д\).*82%/);
+  // fresh reading (< 15 min) → no age suffix
+  assert.doesNotMatch(en.tooltip, /read .* ago/);
+});
+
+test("buildView: an aged Fable row states its age; a day-old one is dropped", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const q = (scopedAsOfSec: number) => ({
+    state: "ok" as const,
+    fiveH: { pct: 7, resetAt: now + WINDOW_5H_SECONDS },
+    sevenD: null,
+    asOfSec: now - 5,
+    scoped: [{ label: "Fable", pct: 82, resetAt: now + 2 * 86400 }],
+    scopedAsOfSec,
+  });
+  // 4h old: still shown (a weekly % moves slowly) but explicitly dated
+  const aged = buildView(totals, W, q(now - 4 * 3600), now, "en");
+  assert.match(aged.tooltip, /Fable \(7d\).*82%.*read .* ago/);
+  assert.match(buildView(totals, W, q(now - 4 * 3600), now, "ru").tooltip, /данные .* назад/);
+  // 30h old: could be wrong by a whole working day → hidden, not guessed
+  assert.doesNotMatch(buildView(totals, W, q(now - 30 * 3600), now, "en").tooltip, /Fable/);
+  // unknown age is treated the same as too old
+  assert.doesNotMatch(buildView(totals, W, q(0), now, "en").tooltip, /Fable/);
+});
+
+test("buildView/buildPanelHtml: the Fable row survives a dead 5h/7d poll", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const q = {
+    state: "error" as const,
+    fiveH: null,
+    sevenD: null,
+    scoped: [{ label: "Fable", pct: 82, resetAt: now + 2 * 86400 }],
+    scopedAsOfSec: now - 120,
+  };
+  // independent source: the 5h/7d failure says nothing about this number
+  assert.match(buildView(totals, W, q, now, "en").tooltip, /Fable \(7d\).*82%/);
+  assert.match(buildPanelHtml(totals, W, q, now, "en"), /Fable \(7d\)/);
+});
+
+test("buildPanelHtml: the Fable row renders with a bar and an explanatory footnote", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const html = buildPanelHtml(
+    totals,
+    W,
+    {
+      state: "ok",
+      fiveH: { pct: 7, resetAt: now + WINDOW_5H_SECONDS },
+      sevenD: { pct: 67, resetAt: now + 7 * 86400 },
+      asOfSec: now - 5,
+      scoped: [{ label: "Fable", pct: 82, resetAt: now + 2 * 86400 }],
+      scopedAsOfSec: now - 5,
+    },
+    now,
+    "ru"
+  );
+  assert.match(html, /Fable \(7д\)/);
+  assert.match(html, /width:82%/);
+  assert.match(html, /title="Недельное окно для одной модели/);
 });
 
 test("buildView: last-known reading shows an 'updated N ago' note when aged (both langs)", () => {

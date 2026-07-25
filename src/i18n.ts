@@ -115,6 +115,15 @@ export interface Messages {
    *  they stop reading as more tariff bullets. */
   sessionHeader: string;
   quotaReset: (remaining: string) => string;
+  /** Label for a per-model weekly window ("Fable" → "Fable (7d)"), so the row
+   *  can never be mistaken for a second 5h window. */
+  scopedLabel: (model: string) => string;
+  /** Inline age suffix for a scoped row — that reading comes from Claude Code's
+   *  own on-disk cache, which refreshes on its own schedule, so an old value is
+   *  labelled instead of silently shown as current. */
+  quotaScopedAge: (ago: string) => string;
+  /** Panel footnote explaining what a per-model weekly row is. */
+  panelScopedHint: string;
   verdict: Record<PaceLevel, string>;
   quotaUnavail: (msg: string) => string;
   quotaStateMsg: Record<Exclude<QuotaState, "ok">, string>;
@@ -245,6 +254,12 @@ const EN: Messages = {
   tariffHeader: "**Subscription quota (real, from server):**",
   sessionHeader: "**This session:**",
   quotaReset: (remaining) => ` · resets in ${remaining}`,
+  scopedLabel: (model) => `${model} (7d)`,
+  quotaScopedAge: (ago) => ` · read ${ago} ago`,
+  panelScopedHint:
+    "A weekly window scoped to one model: it is capped at a share of the plan's weekly allowance, " +
+    "so it can run out while the overall weekly limit still has room. Read from Claude Code's own " +
+    "usage cache, which refreshes on its schedule — the age is shown when the reading is not recent.",
   verdict: {
     normal: "on track",
     tight: "running tight",
@@ -402,6 +417,12 @@ const RU: Messages = {
   tariffHeader: "**Тариф (реальный, с сервера):**",
   sessionHeader: "**Эта сессия:**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,
+  scopedLabel: (model) => `${model} (7д)`,
+  quotaScopedAge: (ago) => ` · данные ${ago} назад`,
+  panelScopedHint:
+    "Недельное окно для одной модели: ей отведена доля недельного лимита плана, поэтому она может " +
+    "закончиться раньше, чем общий недельный лимит. Читается из собственного кэша расхода Claude Code, " +
+    "он обновляется по своему расписанию — если значение не свежее, рядом показан его возраст.",
   verdict: {
     normal: "в норме",
     tight: "близко к лимиту",

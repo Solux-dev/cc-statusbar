@@ -18,6 +18,7 @@ import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { QuotaWindow, parseRateLimitHeaders } from "./metrics";
+import { UsageWindows, hasUsageWindows, parseUsageBody } from "./usage";
 
 export interface QuotaResult {
   fiveH: QuotaWindow | null;
@@ -27,9 +28,23 @@ export interface QuotaResult {
   detail?: string;
 }
 
+/** Same states as QuotaResult, plus the per-model weekly windows only this
+ *  route carries. */
+export interface UsageResult extends UsageWindows {
+  fetchedAtSec: number;
+  state: "ok" | "no-credentials" | "error" | "rate-limited";
+  detail?: string;
+}
+
 const CRED_BETA = "oauth-2025-04-20";
 const API_URL = "https://api.anthropic.com/v1/messages";
 const MODELS_URL = "https://api.anthropic.com/v1/models";
+// The account's full utilization payload — the route Claude Code itself calls
+// for its `/usage` view. A plain READ: no message is generated, so unlike the
+// header route below it costs ZERO tokens, and it returns every window at once
+// (5h, 7d, per-model weekly, credits). Verified live 2026-07-26: 200 with the
+// same local OAuth token, `limits[]` carrying the `weekly_scoped` Fable row.
+const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const QUOTA_MODEL = "claude-haiku-4-5-20251001";
 
 export interface ModelWindowResult {
@@ -254,6 +269,55 @@ export async function fetchQuota(override: string, nowSec: number): Promise<Quot
   return { fiveH, sevenD, fetchedAtSec: nowSec, state: "ok" };
 }
 
+/** Fetch the account's full utilization payload — 5h, 7d AND the per-model
+ *  weekly windows (Fable), which no other channel exposes.
+ *
+ *  Preferred over fetchQuota above where it works: it is a plain GET, so it
+ *  costs ZERO tokens (the header route has to generate a 1-token message to get
+ *  headers to ride on) and it answers with every window in one round trip. Same
+ *  local OAuth token, same resilient transport, same throttle from the caller.
+ *
+ *  Undocumented route → never throws, always state-tagged: on ANY failure the
+ *  caller keeps the header poll and the on-disk cache, so nothing regresses. */
+export async function fetchUsage(override: string, nowSec: number): Promise<UsageResult> {
+  const empty = { fiveH: null, sevenD: null, scoped: [] };
+  const token = readAccessToken(override);
+  if (!token) return { ...empty, fetchedAtSec: nowSec, state: "no-credentials" };
+
+  const resp = await resilientFetch(USAGE_URL, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": CRED_BETA,
+      "content-type": "application/json",
+      "accept-encoding": "identity",
+    },
+  });
+  if (!resp) {
+    return { ...empty, fetchedAtSec: nowSec, state: "error", detail: "no response (connect timeout / network)" };
+  }
+  if (resp.status === 429) {
+    return { ...empty, fetchedAtSec: nowSec, state: "rate-limited", detail: resp.header("retry-after") || "" };
+  }
+  if (resp.status < 200 || resp.status >= 300) {
+    return { ...empty, fetchedAtSec: nowSec, state: "error", detail: `http ${resp.status}` };
+  }
+  let body: any;
+  try {
+    body = JSON.parse(resp.body);
+  } catch {
+    return { ...empty, fetchedAtSec: nowSec, state: "error", detail: "bad json" };
+  }
+  const windows = parseUsageBody(body);
+  if (!hasUsageWindows(windows)) {
+    // 200 but nothing we recognise (API-key session, plan without windows, or a
+    // changed shape) → an honest failure, so the header poll stays in charge.
+    return { ...empty, fetchedAtSec: nowSec, state: "error", detail: "no windows in payload" };
+  }
+  return { ...windows, fetchedAtSec: nowSec, state: "ok" };
+}
+
 /** Fetch a model's context-window limit (max_input_tokens) via GET /v1/models/{id}
  *  using the SAME local OAuth token as the quota feature. Verified 2026-05-31:
  *  the subscription OAuth token returns 200 with max_input_tokens on this route.
@@ -322,6 +386,16 @@ export function shouldPoll(
   if (nowSec - lastFetchSec < throttleSec) return false;
   const activeRecently = lastActivityMs > 0 && Date.now() - lastActivityMs < activityWindowSec * 1000;
   return activeRecently;
+}
+
+/** Whether the free usage payload is currently doing the header poll's job —
+ *  i.e. it answered recently AND carried the 5h/7d windows. While this holds,
+ *  the caller skips the 1-token message poll entirely; the moment the payload
+ *  route fails or stops carrying them, the poll resumes on its own. Pure. */
+export function usageCoversQuota(usage: UsageResult | null, nowSec: number, maxAgeSec: number): boolean {
+  if (!usage || usage.state !== "ok") return false;
+  if (!usage.fiveH && !usage.sevenD) return false;
+  return nowSec - usage.fetchedAtSec < maxAgeSec;
 }
 
 /** Seconds to wait before retrying after a FAILED poll (timeout / network). Much

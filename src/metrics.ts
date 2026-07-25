@@ -22,6 +22,14 @@ export interface QuotaWindow {
   status?: string; // "allowed" | "denied"
 }
 
+/** A weekly window scoped to ONE model (today: Fable, which is capped at a share
+ *  of the plan's weekly allowance and therefore runs out at its own pace). The
+ *  label is the SERVER's own display name — we never hardcode a model list, so
+ *  a future scoped bucket appears by itself. */
+export interface ScopedQuotaWindow extends QuotaWindow {
+  label: string; // e.g. "Fable"
+}
+
 export type PaceLevel = "normal" | "tight" | "over";
 
 /** Current fill of the model's context window — read from the MAIN transcript's

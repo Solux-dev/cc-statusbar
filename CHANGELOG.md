@@ -3,6 +3,43 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.22] — 2026-07-26
+
+### Added
+
+- **Per-model weekly limits — starting with Fable.** Fable is capped at a share
+  of the weekly allowance, so it runs out at its own pace and the overall `7d`
+  number says nothing about it; until now the only way to check was to open
+  claude.ai. The tooltip and panel now carry its own row —
+  `🔴 Fable (7d) ▓▓▓▓▓▓▓░ 91% over pace · resets in 2d18h` — alongside 5h/7d,
+  and a click on the item refreshes it like everything else. The collapsed
+  status-bar line is unchanged (tariff only, as before).
+
+  Rows are **server-driven** — no hardcoded model list, so a future scoped
+  window appears on its own.
+
+### Changed
+
+- **Quota now comes from the account's usage payload — one request, every
+  window, zero tokens.** `GET /api/oauth/usage` (the route Claude Code itself
+  calls for `/usage`, same local OAuth token) returns 5h, 7d **and** the
+  per-model weekly windows in a single plain read. It replaces the old
+  1-token-per-poll message trick in the steady state: same throttle, same
+  activity gate, same manual-refresh click — **but it no longer costs tokens and
+  it carries strictly more data**.
+
+  Nothing was removed. The header poll stays as the safety net and resumes
+  automatically the moment the payload route fails or stops carrying 5h/7d
+  (`usageCoversQuota` in `src/quota.ts` is the single, unit-tested condition).
+  Below it sit the statusLine bridge and — new — Claude Code's own on-disk copy
+  of the payload in `~/.claude.json`, so the numbers survive a dead link and a
+  reload alike. The freshest valid reading always wins.
+
+  Freshness is stated, never assumed: a per-model row older than 15 min shows
+  its age inline, and one older than 24h is hidden rather than presented as
+  current. Undocumented shapes → parsing is isolated in `src/usage.ts` and any
+  change degrades to "no row" instead of a wrong number.
+
 ## [1.0.21] — 2026-07-25
 
 ### Added
