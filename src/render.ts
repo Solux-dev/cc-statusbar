@@ -56,6 +56,164 @@ export interface CacheView {
   hitRatePct: number | null;
 }
 
+/** Which model the session runs on. `state` is the PROVENANCE, and it is shown,
+ *  never smoothed over: "actual" = a real turn ran on it, "planned" = no turn
+ *  yet and Claude Code's settings say a new chat starts on it, "planned-default"
+ *  = no turn yet and nothing pinned (account default). `changedFrom` is set for
+ *  a short window right after the model changed → the segment shouts instead of
+ *  quietly updating. */
+export interface ModelView {
+  label: string | null;
+  state: "actual" | "planned" | "planned-default";
+  changedFrom?: string | null;
+  /** A chat tab is open next to this one and has NOT answered yet, and it is set
+   *  to start on a DIFFERENT model. VS Code exposes no way to know which tab is
+   *  focused, so instead of guessing, the bar names the other one. Null when
+   *  there is no such chat or it would start on the same model (silent when
+   *  nothing can go wrong). */
+  pendingLabel?: string | null;
+  /** Reasoning effort of the same turn / the same settings ("high", "xhigh"…).
+   *  Null when the transcript predates the field and nothing is pinned. */
+  effort?: string | null;
+  effortChangedFrom?: string | null;
+}
+
+/** One subagent of the current session, already reduced to display data. The
+ *  point is transparency about DELEGATED spend: the Lead picks these models on
+ *  its own, and without this they are invisible tokens. */
+export interface SubagentView {
+  agentType: string | null;
+  description: string | null;
+  /** Raw model id — the grouping key. Two deployments of the same family (a
+   *  Bedrock ARN and a plain id, or two dated snapshots) must not merge into one
+   *  row just because they render to the same short label. */
+  modelId: string | null;
+  modelLabel: string | null;
+  effort: string | null;
+  /** 1 = spawned by the Lead; >1 = spawned by another agent. */
+  spawnDepth?: number | null;
+  /** Cache-weighted token-equivalent, same metric as the session headline. */
+  effective: number;
+}
+
+/** Group subagents by model+effort — the answer to "which models did the Lead
+ *  hand my work to, and what did each cost". Sorted by spend, biggest first, so
+ *  an expensive delegation stands out. Pure. */
+export function subagentGroups(
+  list: SubagentView[]
+): Array<{ modelLabel: string | null; effort: string | null; count: number; effective: number }> {
+  const map = new Map<string, { modelLabel: string | null; effort: string | null; count: number; effective: number }>();
+  for (const a of list) {
+    // key on the RAW id (not the display label) so distinct models never merge
+    const key = `${a.modelId ?? a.modelLabel ?? "?"}|${a.effort ?? ""}`;
+    const cur = map.get(key) || { modelLabel: a.modelLabel, effort: a.effort, count: 0, effective: 0 };
+    cur.count += 1;
+    cur.effective += a.effective;
+    map.set(key, cur);
+  }
+  return [...map.values()].sort((a, b) => b.effective - a.effective);
+}
+
+// The CURRENT choice used to be plain bold text — the same colour as every other
+// word in the hover, while the alternatives were blue links, so it could not be
+// told apart from ordinary prose at a glance. It is now marked with a check and
+// bold, giving the row three states that cannot be confused: blue = clickable ·
+// ✓ bold = current · 🟢 = this source has data right now (a different question
+// from "selected").
+//
+// Colour and underline were TRIED and do not work here. Even with `supportHtml`
+// and an inline `<span style=…>` — whose tag and attribute are both in the
+// markdown sanitiser's default allowlists — the status-bar tooltip strips the
+// styling and renders only the text. That surface is not the editor's regular
+// markdown hover. Verified on a real screenshot, not assumed; the markup is gone
+// rather than left in as dead weight that some other editor might print raw.
+const SELECTED_MARK = "✓";
+
+/** Render one row of choices: the active one marked, the rest as links. */
+export function choicesMarkdown<T extends string>(
+  header: string,
+  selected: T,
+  choices: Array<{ value: T; label: string; command: string }>
+): string {
+  const rendered = choices.map(({ value, label, command }) =>
+    selected === value ? `${SELECTED_MARK} **${label}**` : `[${label}](command:${command})`
+  );
+  return `**${header}:** ${rendered.join(" · ")}`;
+}
+
+/** Bar marker for a CONFIRMED model (a real turn ran on it). */
+const MODEL_FACT = "◆";
+/** Bar marker for an EXPECTED model (from settings, not yet confirmed by a turn). */
+const MODEL_PLAN = "◇";
+
+/** Collapsed-bar model segment — first, leftmost, most stable thing in the line.
+ *  Never tints the item background: like context, it is an identity signal, not
+ *  a quota with consequences (the background stays tariff-pace only). */
+function modelSegment(model: ModelView | undefined, m: Messages): string | null {
+  if (!model) return null;
+  if (model.changedFrom && model.label) {
+    return `$(warning) ${model.changedFrom} → ${model.label}`;
+  }
+  if (model.state === "planned-default") return `${MODEL_PLAN} ${m.modelDefaultShort}`;
+  if (!model.label) return null;
+  if (model.state === "planned") return `${MODEL_PLAN} ${model.label} (${m.modelPlannedShort})`;
+  return `${MODEL_FACT} ${model.label}`;
+}
+
+/** Segment naming an unanswered chat open beside this one, when it would start
+ *  on a different model. Silent otherwise. */
+function pendingSegment(model: ModelView | undefined, m: Messages): string | null {
+  if (!model?.pendingLabel) return null;
+  return `$(warning) ${m.modelPendingShort} ${model.pendingLabel}`;
+}
+
+/** Tooltip/panel line for the model — states the provenance in words. */
+function modelLine(model: ModelView | undefined, m: Messages): string | null {
+  if (!model) return null;
+  if (model.changedFrom && model.label) return m.modelChangedLine(model.changedFrom, model.label);
+  if (model.state === "planned-default") return m.modelDefaultLine;
+  if (!model.label) return null;
+  return model.state === "planned" ? m.modelPlannedLine(model.label) : m.modelActualLine(model.label);
+}
+
+/** Collapsed-bar effort segment, right after the model — the second half of the
+ *  same "what am I about to run" question. Its state is inherited from the model
+ *  segment (◆/◇ there), so it stays word-light. */
+function effortSegment(model: ModelView | undefined, m: Messages): string | null {
+  if (!model?.effort) return null;
+  if (model.effortChangedFrom) {
+    return `$(warning) ${m.effortShort} ${model.effortChangedFrom} → ${model.effort}`;
+  }
+  return `${m.effortShort} ${model.effort}`;
+}
+
+/** Tooltip/panel line for the effort level. */
+function effortLine(model: ModelView | undefined, m: Messages): string | null {
+  if (!model?.effort) return null;
+  if (model.effortChangedFrom) return m.effortChangedLine(model.effortChangedFrom, model.effort);
+  return model.state === "actual" ? m.effortActualLine(model.effort) : m.effortPlannedLine(model.effort);
+}
+
+/** How many subagents the tooltip names before summarising the rest. The hover
+ *  card must stay readable; the full list lives in the panel. */
+const TOOLTIP_AGENT_GROUPS = 3;
+
+/** One compact tooltip line: how much of this session was delegated, to which
+ *  models. Null when the session spawned no subagents. */
+function subagentTooltipLine(list: SubagentView[] | undefined, m: Messages): string | null {
+  if (!list || !list.length) return null;
+  const groups = subagentGroups(list);
+  const total = groups.reduce((s, g) => s + g.effective, 0);
+  const shown = groups.slice(0, TOOLTIP_AGENT_GROUPS).map((g) => {
+    const name = g.modelLabel ?? "?";
+    const eff = g.effort ? `/${g.effort}` : "";
+    return `${name}${eff} ×${g.count} ≈${fmtTokens(g.effective)}`;
+  });
+  const rest = groups.length - shown.length;
+  if (rest > 0) shown.push(m.subagentsMore(rest));
+  return m.subagentsLine(list.length, fmtTokens(total), shown.join(" · "));
+}
+
 export interface View {
   text: string;
   tooltip: string;
@@ -187,7 +345,9 @@ export function buildView(
   nowSec: number,
   lang: Lang = "en",
   context?: ContextView,
-  cache?: CacheView
+  cache?: CacheView,
+  model?: ModelView,
+  subagents?: SubagentView[]
 ): View {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -238,12 +398,37 @@ export function buildView(
     : offlineMarker
     ? `${offlineMarker} · ${effFallback}`
     : effFallback;
-  const text = ctxSeg ? `${tariffText} · ${ctxSeg}` : tariffText;
+  const body = ctxSeg ? `${tariffText} · ${ctxSeg}` : tariffText;
+  // Model goes FIRST: it is the most stable part of the line, so the eye always
+  // finds it in the same place — the whole point is a glance that answers "am I
+  // on the right model?" before typing.
+  const identity = [modelSegment(model, m), effortSegment(model, m), pendingSegment(model, m)]
+    .filter(Boolean)
+    .join(" · ");
+  const text = identity ? `${identity} · ${body}` : body;
 
-  // ── rich tooltip: cost-first headline, then tariff + context, then details ──
+  // ── rich tooltip ──
+  // Grouped into blocks separated by a rule, because the hover had grown into one
+  // undifferentiated column: identity · cost · tariff + session · technical
+  // detail · actions. A reader should find "what am I running" and "how much is
+  // left" without parsing the whole card. (A Markdown hover offers no colour or
+  // width control — a thematic break is the one grouping device it does support.
+  // The panel, where we own the CSS, uses a short left-aligned line instead.)
+  const RULE = "---";
   const t: string[] = [];
   t.push(m.title);
   t.push("");
+  const identityLines = [
+    modelLine(model, m),
+    effortLine(model, m),
+    model?.pendingLabel ? m.modelPendingLine(model.pendingLabel) : null,
+  ].filter(Boolean) as string[];
+  if (identityLines.length) {
+    t.push(identityLines.join("  \n"));
+    t.push("");
+    t.push(RULE);
+    t.push("");
+  }
   t.push(m.costCompact(fmtTokens(eff), fmtTokens(noCache), mult));
   t.push("");
 
@@ -263,21 +448,39 @@ export function buildView(
     // old it is — the % stays visible, never silently dropped.
     if (quota.asOfSec) {
       const ageSec = nowSec - quota.asOfSec;
-      if (ageSec >= 60) t.push(m.quotaAsOf(fmtRemaining(ageSec, m.units)));
+      // Blank line first: without it Markdown folds this note INTO the last
+      // quota bullet, so the tooltip read "…resets in 3d0h Updated 5m ago."
+      if (ageSec >= 60) t.push("", m.quotaAsOf(fmtRemaining(ageSec, m.units)));
     }
   } else {
     t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
     t.push(m.localAlwaysAccurate);
   }
+  // "This session" facts answer a different question from the tariff (which is
+  // about the subscription), so they get their own labelled group instead of
+  // trailing the quota list as if they were more quota.
+  const sessionLines: string[] = [];
   const cl = contextLine(context, m);
-  if (cl) t.push(`- ${cl}`);
+  if (cl) sessionLines.push(`- ${cl}`);
   // cache tier — concise, self-explanatory (full footnotes live in the panel)
-  if (cache?.tier) t.push(`- ${m.cacheTierLine(cache.tier)}`);
+  if (cache?.tier) sessionLines.push(`- ${m.cacheTierLine(cache.tier)}`);
+  // delegated work: which models were spawned and what they cost
+  const sub = subagentTooltipLine(subagents, m);
+  if (sub) sessionLines.push(`- ${sub}`);
+  if (sessionLines.length) {
+    t.push("");
+    t.push(m.sessionHeader);
+    t.push(...sessionLines);
+  }
+  t.push("");
+  t.push(RULE);
   t.push("");
   // muted technical breakdown
   t.push(`_${m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite))}_`);
   t.push("");
   t.push(m.legend);
+  t.push("");
+  t.push(RULE);
   t.push("");
   t.push(`[${m.openPanel}](command:ccStatusbar.openPanel) · [${m.switchLang}](command:ccStatusbar.switchLanguage)`);
 
@@ -358,7 +561,10 @@ export function buildPanelHtml(
   nowSec: number,
   lang: Lang = "en",
   context?: ContextView,
-  cache?: CacheView
+  cache?: CacheView,
+  model?: ModelView,
+  subagents?: SubagentView[],
+  leadEffective?: number
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -368,6 +574,15 @@ export function buildPanelHtml(
 
   // headline: cost comparison + savings multiplier (lead with the answer)
   const rows: string[] = [];
+  const identity = [
+    modelLine(model, m),
+    effortLine(model, m),
+    model?.pendingLabel ? m.modelPendingLine(model.pendingLabel) : null,
+  ].filter(Boolean) as string[];
+  for (const line of identity) {
+    rows.push(`<div class="ctxrow">${esc(line.replace(/\*\*/g, ""))}</div>`);
+  }
+  if (identity.length) rows.push(`<div class="sep"></div>`);
   rows.push(`<div class="row big"><span>${esc(m.panelCostLabel)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
   rows.push(`<div class="row"><span>${esc(m.panelNoCacheLabel)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
   rows.push(`<div class="row save"><span>${esc(m.panelSavedLabel)}</span><b>≈ ${fmtTokens(saved)} ${esc(m.tok)} <span class="mult">${esc(m.lowerMult(mult))}</span></b></div>`);
@@ -418,7 +633,10 @@ export function buildPanelHtml(
       const ago = quota.asOfSec ? fmtRemaining(nowSec - quota.asOfSec, m.units) : "?";
       lastKnown = `<p class="muted">${esc(m.quotaLastKnown(parts.join(", "), ago))}</p>`;
     }
+    // Keep the heading in the offline branch too: without it the panel opened
+    // with a bare "temporarily unavailable", giving no clue WHAT is unavailable.
     quotaSection =
+      `<h3>${esc(m.panelQuotaHeader)}</h3>` +
       `<p class="muted">${esc(reason)}</p>` +
       lastKnown +
       `<p class="muted">${esc(m.panelLocalAccurate)}</p>` +
@@ -447,6 +665,63 @@ export function buildPanelHtml(
     cacheSection = `<h3>${esc(m.panelCacheHeader)}</h3>${crows.join("")}`;
   }
 
+  // Delegated work. The Lead chooses subagent models on its own, so this is the
+  // only place the owner can see WHERE the session's tokens actually went —
+  // e.g. an expensive model quietly doing a research errand.
+  let subagentSection = "";
+  if (subagents && subagents.length) {
+    const groups = subagentGroups(subagents);
+    const subTotal = groups.reduce((s, g) => s + g.effective, 0);
+    const lead = leadEffective ?? Math.max(0, eff - subTotal);
+    const sessionTotal = lead + subTotal;
+    const sharePct = sessionTotal > 0 ? Math.round((subTotal / sessionTotal) * 100) : 0;
+    // A real but small share must not print as "0%" — in a section about what
+    // delegation COST, that reads as "it cost nothing".
+    const shareText = sharePct === 0 && subTotal > 0 ? "<1" : String(sharePct);
+
+    const gRows = groups
+      .map((g) => {
+        const name = `${g.modelLabel ?? "?"}${g.effort ? ` · ${g.effort}` : ""}`;
+        const share = subTotal > 0 ? Math.round((g.effective / subTotal) * 100) : 0;
+        return (
+          `<div class="qrow sub">` +
+          `<span class="alabel">${esc(name)}</span>` +
+          `<span class="bar"><i style="width:${share}%;background:var(--cc-green)"></i></span>` +
+          `<b>≈ ${fmtTokens(g.effective)}</b>` +
+          `<span class="verdict">${esc(m.subagentsCount(g.count))}</span>` +
+          `</div>`
+        );
+      })
+      .join("");
+
+    // Individual agents, MOST EXPENSIVE first (the caller sorts them). This
+    // section answers "where did my tokens go", so ordering by recency could hide
+    // the biggest spender below the cut. Capped so a 40-agent session stays a
+    // readable page, with the remainder stated — a silent cut would read as
+    // "that's all of them".
+    const LIST_CAP = 12;
+    const shown = subagents.slice(0, LIST_CAP);
+    const listRows = shown
+      .map((a) => {
+        const depth = a.spawnDepth && a.spawnDepth > 1 ? m.subagentDepth(a.spawnDepth) : null;
+        const who = [a.agentType || "agent", a.modelLabel || "?", a.effort || null, depth]
+          .filter(Boolean)
+          .join(" · ");
+        const what = a.description ? ` — ${a.description}` : "";
+        return `<div class="arow"><b>≈ ${fmtTokens(a.effective)}</b><span>${esc(who)}${esc(what)}</span></div>`;
+      })
+      .join("");
+    const more = subagents.length > LIST_CAP ? `<div class="sub">${esc(m.subagentsMore(subagents.length - LIST_CAP))}</div>` : "";
+
+    subagentSection =
+      `<h3>${esc(m.panelSubagentsHeader)}</h3>` +
+      `<div class="sub">${esc(m.panelSubagentsSummary(subagents.length, fmtTokens(subTotal), shareText))}</div>` +
+      gRows +
+      listRows +
+      more +
+      `<div class="sub">${esc(m.panelSubagentsNote)}</div>`;
+  }
+
   // muted technical breakdown
   const detailsSection =
     `<h3>${esc(m.panelDetailsHeader)}</h3>` +
@@ -459,10 +734,23 @@ export function buildPanelHtml(
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <style>
   :root { --cc-green:#3fb950; --cc-yellow:#d6a31a; --cc-red:#e5534b; }
+  .alabel { width:150px; opacity:.9; overflow-wrap:anywhere; }
+  /* a subagent's value reads "≈ 27.5k" — wider than the quota column's bare "%" */
+  .qrow.sub b { width:auto; min-width:78px; white-space:nowrap; }
+  .qrow.sub .verdict { white-space:nowrap; }
+  .arow { display:flex; gap:10px; align-items:baseline; padding:2px 0; font-size:12px; }
+  .arow b { min-width:64px; text-align:right; font-variant-numeric: tabular-nums; }
+  .arow span { opacity:.75; overflow-wrap:anywhere; }
   body { font-family: var(--vscode-font-family); color: var(--vscode-foreground);
          padding: 14px 18px; font-size: 13px; }
   h2 { font-size: 15px; margin: 0 0 12px; }
-  h3 { font-size: 13px; margin: 18px 0 8px; opacity: .85; }
+  /* Sections are separated by a SHORT left-aligned rule rather than a full-width
+     one: enough to group the page visually without turning it into a form. */
+  h3 { font-size: 13px; margin: 22px 0 8px; opacity: .85; position:relative; padding-top: 14px; }
+  h3::before { content:""; position:absolute; top:0; left:0; width:44%; height:1px;
+               background: var(--vscode-panel-border, rgba(128,128,128,.32)); }
+  .sep { width:44%; height:1px; margin:14px 0 12px;
+         background: var(--vscode-panel-border, rgba(128,128,128,.32)); }
   .row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; }
   .row.big b { font-size: 16px; }
   .row.save b { color: var(--cc-green); }
@@ -497,6 +785,7 @@ export function buildPanelHtml(
   ${rows.join("\n  ")}
   ${quotaSection}
   ${cacheSection}
+  ${subagentSection}
   ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
 </body>

@@ -9,6 +9,8 @@ import {
   Totals,
   ContextInfo,
   CacheTier,
+  AgentDigest,
+  agentDigest,
   sumTranscript,
   addTotals,
   emptyTotals,
@@ -62,6 +64,139 @@ function readFileSafe(p: string): string {
   }
 }
 
+/** One subagent of the active session, as shown in the panel: which model the
+ *  Lead delegated to, at what effort, what it cost, and what it was for. */
+export interface SubagentInfo {
+  /** Agent id from the file name (agent-<id>.jsonl). */
+  id: string;
+  /** Agent type from the sibling .meta.json ("general-purpose", "Explore", …). */
+  agentType: string | null;
+  /** Short task description the spawner gave it. */
+  description: string | null;
+  model: string | null;
+  effort: string | null;
+  /** 1 = spawned by the Lead. >1 = spawned by ANOTHER agent — real and common
+   *  (measured on this machine: 82 of 620 agents, nesting up to depth 5), so the
+   *  UI must not claim the Lead chose every one of these models. */
+  spawnDepth: number | null;
+  /** Agent that spawned it, when nested. */
+  parentAgentId: string | null;
+  totals: Totals;
+  lastTurnMs: number;
+}
+
+/** Parse cache for agent files: an agent's transcript is APPEND-ONLY and most of
+ *  them are finished, so re-parsing every file on every 10s tick is pure waste
+ *  (a busy session can hold dozens of MB of agent logs). Keyed by path,
+ *  invalidated by mtime+size. */
+interface AgentMeta {
+  agentType: string | null;
+  description: string | null;
+  spawnDepth: number | null;
+  parentAgentId: string | null;
+}
+
+interface AgentCacheEntry {
+  mtimeMs: number;
+  size: number;
+  /** The sibling .meta.json is written independently of the transcript, so it
+   *  needs its own invalidation stamp — keying only on the .jsonl could pin a
+   *  missing/half-written description for the lifetime of the window. */
+  metaStamp: string;
+  digest: AgentDigest;
+  meta: AgentMeta;
+}
+const agentCache = new Map<string, AgentCacheEntry>();
+
+function metaPathFor(jsonlPath: string): string {
+  // Claude Code writes agent-<id>.meta.json next to agent-<id>.jsonl.
+  return jsonlPath.replace(/\.jsonl$/, ".meta.json");
+}
+
+function metaStamp(metaPath: string): string {
+  try {
+    const st = fs.statSync(metaPath);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return "none";
+  }
+}
+
+function readAgentMeta(metaPath: string): AgentMeta {
+  try {
+    const o = JSON.parse(readFileSafe(metaPath));
+    return {
+      agentType: typeof o?.agentType === "string" ? o.agentType : null,
+      description: typeof o?.description === "string" ? o.description : null,
+      spawnDepth: typeof o?.spawnDepth === "number" ? o.spawnDepth : null,
+      parentAgentId: typeof o?.parentAgentId === "string" ? o.parentAgentId : null,
+    };
+  } catch {
+    return { agentType: null, description: null, spawnDepth: null, parentAgentId: null };
+  }
+}
+
+/** Read every subagent of one session. */
+export function readSubagents(mainTranscript: string): SubagentInfo[] {
+  const stem = mainTranscript.replace(/\.jsonl$/, "");
+  const subDir = path.join(stem, "subagents");
+  let names: string[];
+  try {
+    names = fs.readdirSync(subDir);
+  } catch {
+    return []; // no subagents dir — fine
+  }
+  const out: SubagentInfo[] = [];
+  const seenPaths = new Set<string>();
+  for (const name of names) {
+    if (!name.startsWith("agent-") || !name.endsWith(".jsonl")) continue;
+    const full = path.join(subDir, name);
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    const metaPath = metaPathFor(full);
+    const stamp = metaStamp(metaPath);
+    const cached = agentCache.get(full);
+    let entry: AgentCacheEntry;
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size && cached.metaStamp === stamp) {
+      entry = cached;
+    } else {
+      entry = {
+        mtimeMs: st.mtimeMs,
+        size: st.size,
+        metaStamp: stamp,
+        digest: cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size
+          ? cached.digest // only the metadata changed — no need to re-parse the log
+          : agentDigest(readFileSafe(full)),
+        meta: readAgentMeta(metaPath),
+      };
+      agentCache.set(full, entry);
+    }
+    seenPaths.add(full);
+    out.push({
+      id: name.replace(/^agent-/, "").replace(/\.jsonl$/, ""),
+      agentType: entry.meta.agentType,
+      description: entry.meta.description,
+      model: entry.digest.model,
+      effort: entry.digest.effort,
+      spawnDepth: entry.meta.spawnDepth,
+      parentAgentId: entry.meta.parentAgentId,
+      totals: entry.digest.totals,
+      lastTurnMs: entry.digest.lastTurnMs || st.mtimeMs,
+    });
+  }
+  // Drop cache entries for agents outside the session we are now watching, so a
+  // long-lived window does not accumulate every session it has ever seen.
+  for (const key of agentCache.keys()) {
+    if (!seenPaths.has(key)) agentCache.delete(key);
+  }
+  out.sort((a, b) => b.lastTurnMs - a.lastTurnMs);
+  return out;
+}
+
 /** Sum the active session: main transcript + its subagents/agent-*.jsonl.
  *  COST (`totals`) sums main + subagents. CONTEXT (`context`) is the MAIN
  *  transcript's last turn ONLY — subagents have separate windows (see spec). */
@@ -72,6 +207,10 @@ export function readSessionTotals(cwd: string): {
   context: ContextInfo;
   cacheTier: CacheTier;
   cacheHitRatePct: number | null;
+  /** Lead-only consumption, so the panel can say how much of the session's
+   *  spend went to delegated work. */
+  leadTotals: Totals;
+  subagents: SubagentInfo[];
 } {
   const main = findActiveTranscript(cwd);
   if (!main) {
@@ -79,9 +218,11 @@ export function readSessionTotals(cwd: string): {
       totals: emptyTotals(),
       transcript: null,
       mtimeMs: 0,
-      context: { tokens: null, modelId: null },
+      context: { tokens: null, modelId: null, effort: null, turnId: null },
       cacheTier: null,
       cacheHitRatePct: null,
+      leadTotals: emptyTotals(),
+      subagents: [],
     };
   }
 
@@ -101,16 +242,17 @@ export function readSessionTotals(cwd: string): {
   }
 
   // subagents live in <main-without-ext>/subagents/agent-*.jsonl
-  const stem = main.replace(/\.jsonl$/, "");
-  const subDir = path.join(stem, "subagents");
-  try {
-    for (const name of fs.readdirSync(subDir)) {
-      if (!name.startsWith("agent-") || !name.endsWith(".jsonl")) continue;
-      totals = addTotals(totals, sumTranscript(readFileSafe(path.join(subDir, name))));
-    }
-  } catch {
-    /* no subagents dir — fine */
-  }
+  const subagents = readSubagents(main);
+  for (const a of subagents) totals = addTotals(totals, a.totals);
 
-  return { totals, transcript: main, mtimeMs, context, cacheTier, cacheHitRatePct: cacheHit };
+  return {
+    totals,
+    transcript: main,
+    mtimeMs,
+    context,
+    cacheTier,
+    cacheHitRatePct: cacheHit,
+    leadTotals: mainTotals,
+    subagents,
+  };
 }

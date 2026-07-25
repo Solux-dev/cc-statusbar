@@ -76,6 +76,30 @@ export interface Messages {
   w5h: string; // short window label "5h" / "5ч"
   w7d: string;
   ctxShort: string; // collapsed-bar context label "ctx" / "конт"
+  // model identity (collapsed bar + tooltip/panel)
+  modelPlannedShort: string; // bar suffix for a not-yet-confirmed model
+  modelDefaultShort: string; // bar text when nothing is pinned in settings
+  modelActualLine: (label: string) => string;
+  modelPlannedLine: (label: string) => string;
+  modelDefaultLine: string;
+  modelChangedLine: (from: string, to: string) => string;
+  // an unanswered chat open beside this one, set to start on another model
+  modelPendingShort: string;
+  modelPendingLine: (label: string) => string;
+  // reasoning effort — deliberately NOT "эфф": that already means "эффективные
+  // токены" in this UI (effShort) and the two can appear in the same line.
+  effortShort: string;
+  effortActualLine: (value: string) => string;
+  effortPlannedLine: (value: string) => string;
+  effortChangedLine: (from: string, to: string) => string;
+  // subagents (delegated work)
+  subagentsLine: (count: number, total: string, breakdown: string) => string;
+  subagentsMore: (n: number) => string;
+  subagentsCount: (n: number) => string;
+  subagentDepth: (depth: number) => string;
+  panelSubagentsHeader: string;
+  panelSubagentsSummary: (count: number, total: string, share: string) => string;
+  panelSubagentsNote: string;
   // tooltip
   title: string;
   // token-equivalent headline: one compact line (with cache · without · ×lower)
@@ -87,6 +111,9 @@ export interface Messages {
   contextNoLimit: (used: string, detail?: string) => string;
   contextLimitUnavailable: string;
   tariffHeader: string;
+  /** Group label for the "this session" lines (context / cache / subagents), so
+   *  they stop reading as more tariff bullets. */
+  sessionHeader: string;
   quotaReset: (remaining: string) => string;
   verdict: Record<PaceLevel, string>;
   quotaUnavail: (msg: string) => string;
@@ -183,6 +210,30 @@ const EN: Messages = {
   w5h: "5h",
   w7d: "7d",
   ctxShort: "ctx",
+  modelPlannedShort: "planned",
+  modelDefaultShort: "default model",
+  modelActualLine: (label) => `model: **${label}** — confirmed by the last turn`,
+  modelPlannedLine: (label) =>
+    `model: **${label}** — planned for this chat (from Claude Code settings); confirmed after the first reply`,
+  modelDefaultLine:
+    "model: **account default** — no model pinned in Claude Code settings; the exact one shows after the first reply",
+  modelChangedLine: (from, to) => `⚠ **model changed:** ${from} → ${to}`,
+  modelPendingShort: "new chat:",
+  modelPendingLine: (label) =>
+    `⚠ another chat is open here with no reply yet — it starts on **${label}**`,
+  effortShort: "effort",
+  effortActualLine: (value) => `effort: **${value}** — confirmed by the last turn`,
+  effortPlannedLine: (value) => `effort: **${value}** — planned (from Claude Code settings)`,
+  effortChangedLine: (from, to) => `⚠ **effort changed:** ${from} → ${to}`,
+  subagentsLine: (count, total, breakdown) => `subagents: ${count} · ≈${total} tok — ${breakdown}`,
+  subagentsMore: (n) => `+${n} more`,
+  subagentsCount: (n) => (n === 1 ? "1 agent" : `${n} agents`),
+  subagentDepth: (depth) => `depth ${depth}`,
+  panelSubagentsHeader: "Delegated work (subagents)",
+  panelSubagentsSummary: (count, total, share) =>
+    `${count} subagent${count === 1 ? "" : "s"} · ≈ ${total} tok — ${share}% of this session's consumption`,
+  panelSubagentsNote:
+    "Models here are chosen by the agent that spawned each worker — the Lead, or another agent when depth > 1. Ask for a specific model in your task if a cheaper one would do: this is where delegated tokens actually go.",
   title: "**Claude Code — session usage**",
   costCompact: (withCache, noCache, mult) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
@@ -192,6 +243,7 @@ const EN: Messages = {
   contextNoLimit: (used, detail) => `context: ${used} (limit n/a${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "context limit unavailable",
   tariffHeader: "**Subscription quota (real, from server):**",
+  sessionHeader: "**This session:**",
   quotaReset: (remaining) => ` · resets in ${remaining}`,
   verdict: {
     normal: "on track",
@@ -249,6 +301,16 @@ const EN: Messages = {
     "A descriptive read of where this session's tokens went — not a score.",
 };
 
+/** Russian plural forms: 1 саб-агент · 2–4 саб-агента · 5+ саб-агентов.
+ *  "саб-агент(ов)" reads like a form field, not a sentence. */
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
 const RU: Messages = {
   units: { d: "д", h: "ч", m: "м" },
   providerNames: { auto: "Авто", claude: "Claude Code", codex: "Codex" },
@@ -305,6 +367,30 @@ const RU: Messages = {
   w5h: "5ч",
   w7d: "7д",
   ctxShort: "конт",
+  modelPlannedShort: "план",
+  modelDefaultShort: "модель по умолчанию",
+  modelActualLine: (label) => `модель: **${label}** — подтверждена последним ходом`,
+  modelPlannedLine: (label) =>
+    `модель: **${label}** — план для этого чата (из настроек Claude Code); подтвердится после первого ответа`,
+  modelDefaultLine:
+    "модель: **по умолчанию для аккаунта** — в настройках Claude Code ничего не закреплено; точная появится после первого ответа",
+  modelChangedLine: (from, to) => `⚠ **модель сменилась:** ${from} → ${to}`,
+  modelPendingShort: "новый чат:",
+  modelPendingLine: (label) =>
+    `⚠ рядом открыт чат без ответов — он стартует на **${label}**`,
+  effortShort: "усилие",
+  effortActualLine: (value) => `усилие: **${value}** — подтверждено последним ходом`,
+  effortPlannedLine: (value) => `усилие: **${value}** — план (из настроек Claude Code)`,
+  effortChangedLine: (from, to) => `⚠ **усилие сменилось:** ${from} → ${to}`,
+  subagentsLine: (count, total, breakdown) => `саб-агенты: ${count} · ≈${total} ток — ${breakdown}`,
+  subagentsMore: (n) => `ещё +${n}`,
+  subagentsCount: (n) => `${n} шт.`,
+  subagentDepth: (depth) => `уровень ${depth}`,
+  panelSubagentsHeader: "Делегировано саб-агентам",
+  panelSubagentsSummary: (count, total, share) =>
+    `${count} ${pluralRu(count, "саб-агент", "саб-агента", "саб-агентов")} · ≈ ${total} ток — ${share}% расхода этой сессии`,
+  panelSubagentsNote:
+    "Модель выбирает тот, кто запустил агента: лид — или другой агент, если уровень больше 1. Если задача проще, попросите конкретную модель прямо в ТЗ: именно сюда уходят делегированные токены.",
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
@@ -314,6 +400,7 @@ const RU: Messages = {
   contextNoLimit: (used, detail) => `контекст: ${used} (лимит н/д${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "лимит контекста недоступен",
   tariffHeader: "**Тариф (реальный, с сервера):**",
+  sessionHeader: "**Эта сессия:**",
   quotaReset: (remaining) => ` · сброс через ${remaining}`,
   verdict: {
     normal: "в норме",

@@ -3,6 +3,164 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.20] — 2026-07-25
+
+### Added
+
+- **The model you are talking to, right in the status-bar line.** The line now
+  starts with e.g. `◆ Opus 5`, so the model is visible passively, where the eyes
+  already are — instead of only inside the chat UI's picker. It answers the
+  question that costs real quota when it goes unnoticed: *"am I about to type
+  'continue' into the wrong model?"*
+  - `◆` = **confirmed**: that model ran the last real turn (read from the local
+    transcript, zero network, zero token cost).
+  - `◇` = **planned**: the chat has not answered yet, so the name comes from
+    Claude Code's own settings (`model` key — which its VS Code model picker
+    writes, and `/model` writes when saved as the default for new sessions).
+    That is what a **new** chat will start on, which is the only truthful answer
+    available before the first reply exists. With nothing pinned the line says
+    `default model` rather than inventing one.
+  - A chat that has never answered is identified through Claude Code's
+    live-session registry (`~/.claude/sessions/*.json`, written when the tab
+    opens — measured ~146s before the first prompt created the transcript): a
+    registered session with no transcript file has never replied. Without this the
+    bar would show the **previous** session's model as if it were current, which
+    is exactly the mistake the feature exists to prevent. A **resumed** chat keeps
+    its confirmed model — its transcript already exists, so a known fact is not
+    downgraded to an expectation just because the process restarted.
+  - When an unanswered chat is open **beside** an active one, the bar names it
+    (`⚠ new chat: Sonnet 5`) rather than guessing which tab has focus — VS Code
+    exposes no API for that. Silent when both would run the same model.
+  - **A switch is flagged until the next reply**, not for a fixed number of
+    seconds: a timer would quietly expire while you are away from the keyboard,
+    which is exactly when a switch goes unnoticed. It is not a background colour —
+    identity never tints the item (same rule as context: only tariff pace does).
+  - **Subagent models never appear here.** A Sonnet helper spawned by an Opus
+    lead does not change the line: subagent turns live in separate
+    `subagents/agent-*.jsonl` files and additionally carry `isSidechain`, and both
+    are excluded.
+  - The display name reuses `display_name` from the Models API response the
+    extension already fetches for the context-window limit — no extra request.
+    Offline the label is derived from the model id for Anthropic's own id shapes,
+    so it shows instantly. Ids from other deployments (Bedrock ARNs, Vertex /
+    Foundry names, private aliases) are kept as they are, trimmed to their
+    identifying tail: a shortener guessing at them would produce a confident wrong
+    name.
+  - The planned value also honours `ANTHROPIC_MODEL`, and an explicit
+    `"model": "default"` in a narrower settings file *clears* a broader pin
+    instead of deferring to it.
+  - New setting `ccStatusbar.model.enabled` (default `true`).
+- **Reasoning effort next to the model** — `◆ Opus 5 · effort high`. Same two
+  sources and the same honesty rules as the model: confirmed from the last turn's
+  `effort` field, or planned from Claude Code's settings (`effortLevel`, and
+  `ultracode: true` which *means* xhigh). A switch is flagged until the next reply
+  (`⚠ effort high → xhigh`). Older transcripts have no effort field — then
+  nothing is shown rather than a guess. Deliberately worded `effort` / `усилие`,
+  not `эфф`: that abbreviation already means *effective tokens* in this UI and
+  the two can appear in the same line.
+- **Delegated work: which models your subagents actually used.** The hover
+  tooltip gains one line — `subagents: 8 · ≈2.3M tok — Opus 5/xhigh ×4 ≈1.5M ·
+  Sonnet 5/xhigh ×4 ≈861.8k` — and the panel gains a full section: spend grouped
+  by model+effort (with each group's share), then the individual agents, each with
+  its type, model, effort, token-equivalent and task description (capped at 12
+  with "+N more" stated, never a silent cut). Those models are chosen by the agent
+  that spawned each worker, not by you; this is the only place that choice is
+  visible, and it is usually where the session's tokens actually went.
+  Individual agents are listed **most expensive first** — ordering by recency
+  could hide the biggest spender below the cut — and grouping keys on the raw
+  model id, so two different deployments of one family never merge into a single
+  row. Agents spawned by another agent rather than by the Lead are marked
+  `depth N` (nesting reaches depth 5 in practice), so the breakdown says who
+  actually chose to spend the tokens.
+- New setting `ccStatusbar.subagents.enabled` (default `true`) hides the
+  breakdown without affecting the corrected totals.
+- Agent transcripts are parsed once and cached by mtime+size of both the log and
+  its metadata file, so the new breakdown costs no extra work on the 10s redraw
+  tick even in a session with dozens of agents, and a description written after
+  the log still appears. Cache entries outside the watched session are dropped.
+
+### Changed
+
+- **The hover is grouped instead of being one long column.** It had grown to
+  cover identity, cost, quota, session facts, technical detail and actions with
+  nothing separating them. Blocks are now divided by a rule, and the context /
+  cache / subagent lines moved out of the quota bullet list into their own
+  labelled **This session** group — they answer a different question from the
+  subscription tariff and should not read as more of it. The panel gets the same
+  treatment with a short left-aligned rule above each section (a Markdown hover
+  offers no width or colour control; the panel, where the CSS is ours, does).
+- **The context dot warns much earlier: 🟢 <40% · 🟡 40–60% · 🔴 60%+** (was
+  <50 / 50–80 / 80+). Filling a 1M window is never the goal — answer quality
+  degrades progressively long before the limit, and a fatter context also costs
+  more quota per turn. So 🟡 now reads as "start looking for a good place to
+  finish, ideally before auto-compaction decides for you" and 🔴 as "wrap up and
+  carry the rest into a fresh session". A dot that only turned red at 80% was
+  warning after the damage was done. The dot still never tints the whole item —
+  only tariff pace does that.
+- **The selected provider / language is now visible at a glance.** It used to be
+  plain bold text — the same colour as every other word in the hover, while the
+  alternatives were blue links — so the current choice could not be told apart
+  from ordinary prose. It is now marked `✓` and bold, giving the row three states
+  that cannot be confused: blue = clickable · ✓ bold = current · 🟢 = this source
+  has data right now (a different question from "selected"). Colour and an
+  underline were tried and dropped: the status-bar tooltip strips inline styling
+  even though the tag and attribute are in the markdown sanitiser's default
+  allowlists — that surface is not the editor's regular markdown hover.
+
+### Fixed
+
+- **A small delegation share printed as "0%"** in the panel — in the very section
+  about what delegation cost. A real but sub-percent share now reads `<1%`.
+- **The 5h/7d quota could stop arriving for weeks on a perfectly working
+  connection.** The poll failed at the CONNECT stage, so the bar showed "quota
+  offline" while Claude Code's own usage view showed the numbers fine. Cause:
+  `api.anthropic.com` publishes both an A and an AAAA record, and Node's Happy
+  Eyeballs gives each address family only **250 ms** to connect. On a link whose
+  IPv4 handshake takes 350–550 ms — perfectly normal — Node abandoned the
+  *working* IPv4 address, moved on to an IPv6 address with no route, and the
+  request died with a connect timeout. Measured on the affected machine: IPv4
+  connected in 352 ms, IPv6 timed out, and the identical request from Python
+  answered in 1.5 s.
+  The transport now uses Node's `https` instead of `fetch`, which allows a
+  per-request family budget (2 s — far above any real handshake, still fast to
+  give up when a family truly is unreachable), and pins IPv4 on the last of the
+  three attempts. Same request on the same machine: **HTTP 200 in 1.8 s**.
+  Two bonuses: the context-window limit uses the same transport, so it too stops
+  falling back to the built-in table; and `https` honours the proxy support the
+  editor patches into Node, which `fetch` never did.
+- **Subagent tokens were counted as ZERO — the session cost was massively
+  understated.** `sumTranscript` skipped `isSidechain` turns (correct for the
+  main transcript, where inlined sidechains would otherwise be double-counted),
+  but **every** turn inside an `agent-*.jsonl` is a sidechain by definition, so
+  each agent file summed to nothing. Measured on a real 8-subagent session:
+  2.32M of 2.75M effective tokens — **84%** — were missing from the headline,
+  the panel, and the `eff` fallback in the bar. Agent files are now summed with
+  sidechains included; the main transcript still excludes them.
+
+- **A turn without a model no longer inherits the previous one.** The model was
+  only overwritten when the newest turn carried one, so an older model could be
+  presented as CONFIRMED beside newer token counts. It is now reset per turn —
+  fail-visibly rather than fail-confidently.
+- **`<synthetic>` placeholder turns no longer affect the context %.** Claude Code
+  writes assistant entries with model `<synthetic>` for interrupts/errors; those
+  were being treated as a real prompt, so a synthetic turn could reset the shown
+  context fill and be used as the key for a context-window lookup. They are now
+  skipped.
+- **The "updated N ago" note folded into the last quota bullet** in the hover
+  (`… resets in 3d0h Updated 5m ago.`) — a Markdown list swallows a following
+  line without a blank separator.
+- **The panel lost its quota heading when the quota was offline**, so it opened
+  with a bare "temporarily unavailable" and no clue what was unavailable.
+- **A subagent's token value wrapped onto two lines** in the panel: it was sharing
+  the narrow column sized for a bare quota percentage.
+- **Russian plural forms** for the subagent count ("2 саб-агента", not
+  "2 саб-агент(ов)").
+- **README corrected:** the local statusline quota bridge was described as
+  covering both terminal and in-editor sessions. It does not — the VS Code /
+  Cursor integration runs Claude Code without a status line (as `statusline.py`
+  and the 1.0.19 notes already stated), so in the IDE the network poll is what
+  keeps the limits current.
+
 ## [1.0.19] — 2026-06-22
 
 ### Fixed

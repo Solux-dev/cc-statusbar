@@ -18,7 +18,7 @@ view, or run `code --install-extension solux-dev.cc-statusbar`.
 
 | English | Русский |
 |---------|---------|
-| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png?v=2) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png?v=2) |
+| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png?v=3) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png?v=3) |
 
 The collapsed bar lives at the bottom-right of the status bar; hover it for the
 full breakdown shown above. Want to keep it open? Click **“⤢ Open panel”** in
@@ -27,21 +27,74 @@ the tooltip (or run *“Claude/Codex Statusbar: Open usage panel”*) to dock a
 
 ## What it shows
 
-Compact status-bar line (click to refresh) — when the real quota is available
-it shows the **tariff** per window, then the **context-window fill**:
+Compact status-bar line (click to refresh) — it shows **which model you are
+talking to**, then the **tariff** per window, then the **context-window fill**:
 
 ```text
-🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
+◆ Opus 5 · effort high · 🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
 Codex · 🟢 5h 24% (2h41m) · 🟢 7d 41% (4d3h) · 🟢 ctx 47%
 ```
 
+`◆ Opus 5` is the model of the session in front of you, **confirmed** by its
+last real turn (read from the local transcript). In a chat that hasn't answered
+yet the marker changes to `◇` and the name comes from Claude Code's own settings
+— what a new chat is *set to start on*:
+
+```text
+◇ Sonnet 5 (planned) · effort high · …    ← new chat, pinned in settings
+◇ default model · effort high · …         ← new chat, no model pinned (account default)
+⚠ Sonnet 5 → Opus 5 · effort high · …     ← the model just changed
+◆ Opus 5 · ⚠ effort high → xhigh · …      ← the effort just changed
+◆ Opus 5 · ⚠ new chat: Sonnet 5 · …       ← an unanswered chat is open beside this one
+```
+
+A change stays highlighted **until the next reply**, not for a fixed number of
+seconds — a timer would quietly expire while you are away from the keyboard,
+which is exactly when a switch goes unnoticed.
+
+A **resumed** chat keeps its confirmed model: its transcript already exists, so a
+known fact is never downgraded to an expectation just because the process
+restarted. When an unanswered chat is open next to an active one, the bar names
+it (`⚠ new chat: …`) instead of guessing which tab you are looking at — VS Code
+exposes no API for that. It stays silent when both would run the same model, i.e.
+when nothing can go wrong.
+
+![Model, effort and an unanswered chat opened beside this one](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-model-en.png?v=1)
+
+*The session is confirmed on Opus 5 at xhigh effort, while the chat just opened
+next to it is set to start on Fable 5 1M — named before a single token is spent
+on it.*
+
+`effort` is the reasoning level (`low` / `medium` / `high` / `xhigh`): the one the
+last turn ran at, or — in a chat that has not answered — the one it is set to
+start on, marked `(planned)` just like the model. It is spelled out rather than
+abbreviated to `eff` on purpose: `eff` already means *effective tokens* here, and
+both can appear in the same line.
+
+The point is to catch "wrong model" *before* you type, instead of discovering it
+after a costly turn. Two guarantees. **Provenance is always visible:** `◆`
+confirmed, `◇` expected, or the explicit `A → B` form while a switch is being
+flagged — the previous session's model is never shown as if it were current.
+**Subagent models never appear in this segment:** a Sonnet helper spawned by an
+Opus lead does not change the line, because subagent turns live in separate
+transcripts and are excluded from it — their tokens are still counted in the
+session totals (see [Delegated work](#delegated-work--where-your-tokens-actually-went)).
+Like the context dot, the model segment never recolours the whole item: identity
+is information, not a quota with consequences.
+
 `ctx 47%` is how full the model's context window is right now (current input ÷
 the model's window limit) — a quick read of how big a next step you can take. Its
-dot is **purely informational** (🟢 under 50% · 🟡 50–80% · 🔴 80%+) and,
+dot is **purely informational** (🟢 under 40% · 🟡 40–60% · 🔴 60%+) and,
 unlike the tariff, it **never** recolours the whole item: context is just
 information, not a quota with consequences, so "how full" and "burn pace" stay
 visually separate. If the window limit can't be fetched, the `ctx` segment is
 simply hidden (the % is never guessed).
+
+Those thresholds are deliberately early. With a 1M window, filling it is never
+the goal: answer quality degrades progressively well before the limit, and a
+fatter context also costs more quota per turn. 🟡 reads as "start looking for a
+good place to finish — ideally before auto-compaction decides for you", 🔴 as
+"wrap up and carry the rest into a fresh session".
 
 When the quota channel is off/unavailable it falls back to the local
 token-equivalent number: `$(pulse) eff 4.7M`.
@@ -59,16 +112,49 @@ Hover for the full breakdown (tooltip):
   the **whole item turns yellow/red** when the current burn pace risks
   exceeding a window.
 - **context** — how full the model's window is now, as a full line
-  `context: 47% (468k / 1M)`. Read once per model from the Anthropic Models API
+  `context: 47% (468k / 1M)`. For Claude Code the limit is read once per model
+  from the Anthropic Models API
   (`max_input_tokens`, cached 24h); hidden entirely if the limit can't be
   fetched (never guessed).
 - **cache** — the prompt-cache tier this session is on, auto-detected from the
   transcript, e.g. `🗄 Cache: 1-hour tier — survives ~1h idle`.
+- **subagents** — one line naming where delegated tokens went:
+  `subagents: 8 · ≈2.3M tok — Opus 5/xhigh ×4 ≈1.5M · Sonnet 5/xhigh ×4 ≈861.8k`.
+
+The hover is grouped into blocks — identity, the numbers, technical detail,
+actions — separated by a rule, and the panel uses a short left-aligned rule above
+each section. In the hover's footer the **current** provider and language are
+marked `✓` and bold, the alternatives stay blue links, and a 🟢 means "this
+source has data right now" — a different thing from "this one is selected".
 
 The "with cache" figure is cache-weighted (cheap reads, costly writes:
 `work + 0.1·cache_read + 1.25·cache_write`), so it stays comparable across
 sessions. It is a token-equivalent, not a billing price. When the tariff line is
 unavailable, this same number is the bar's `eff` fallback.
+
+## Delegated work — where your tokens actually went
+
+Subagents are spawned and given their models by the agent that created them —
+the Lead, or another agent when nesting goes deeper. Open the panel for a
+**Delegated work (subagents)** section:
+
+![The panel, with the delegated-work section at the bottom](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=1)
+
+Spend grouped by model+effort first (the answer to *"which models did it hand my
+work to, and what did that cost"*), then the individual agents **most expensive
+first** with their type, model, effort, token-equivalent and task description —
+ordering by recency could hide the biggest spender below the cut. Grouping keys
+on the raw model id, so two different deployments never merge into one row. Long
+lists are capped at 12 with the remainder stated — never a silent cut. Same
+numbers, one line, in the hover tooltip.
+
+Agents spawned by *another* agent rather than by the Lead are marked `depth N`
+(real and common — nesting reaches depth 5 in practice), so the breakdown says
+who actually chose to spend the tokens.
+
+This is not cosmetic: those tokens count against your quota, and nothing else
+shows where they went. If a research errand does not need an expensive model,
+name the model you want in the task itself.
 
 ## Provider: Auto / Claude Code / Codex
 
@@ -126,7 +212,7 @@ not available instead of guessed.
 | `without cache` / без кэша | the same session if cached input had been read fresh — a comparison number, not billing | та же сессия, если бы ввод из кэша читался заново — число для сравнения, не биллинг |
 | `work` / работа | raw input + output tokens (shown under Details) | сырые токены ввода + вывода (в блоке «Детали») |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
-| `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be; its dot is informational (🟢<50% · 🟡50–80% · 🔴80%+) and never tints the whole bar | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше; кружок информационный (🟢<50% · 🟡50–80% · 🔴80%+) и не красит весь бар |
+| `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be; its dot is informational (🟢<40% · 🟡40–60% · 🔴60%+) and never tints the whole bar | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше; кружок информационный (🟢<40% · 🟡40–60% · 🔴60%+) и не красит весь бар |
 | cache tier / тир кэша | how long your prompt cache stays warm while idle — available for Claude Code; Codex does not expose this yet | сколько кэш живёт при простое — доступно для Claude Code; Codex пока это не отдаёт |
 | input from cache / ввод из кэша | share of the prompt served from cache (cheap) vs re-read fresh — higher = better reuse; descriptive, not a score | доля промпта из кэша (дёшево) против повторного чтения — выше = лучше переиспользование; описание, не оценка |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
@@ -161,8 +247,10 @@ _По умолчанию язык берётся из языка редакто�
      its **statusLine hook** into `~/.claude/.cc-statusbar-quota.json`; the
      extension just reads that file. This is the **same real server data Claude
      Code shows in its own usage view**, obtained without any request of our own
-     — so it keeps working on links too weak for a network call to complete, and
-     it covers **both** terminal and in-editor Claude Code sessions. Works on
+     — so it keeps working on links too weak for a network call to complete.
+     **Terminal sessions only:** the VS Code / Cursor integration runs Claude
+     Code *without* a status line, so an IDE-only session never feeds this file
+     and the network poll below is what keeps the limits current there. Works on
      **Windows, macOS, and Linux** (it rides the official statusLine contract,
      not any OS-specific keychain or in-process traffic interception).
   2. **Network poll — resilient fallback.** A tiny throttled request to
@@ -181,6 +269,38 @@ _По умолчанию язык берётся из языка редакто�
 - **Context limit** — read once per model from the Anthropic Models API
   (`max_input_tokens`, cached 24h). If it cannot be fetched, the `%` is hidden
   instead of guessed.
+- **Model** — two local sources, no extra request:
+  1. **Confirmed (`◆`)** — the `model` field of the last assistant turn in the
+     **main** transcript. Subagent turns are excluded twice over (they live in
+     `<session>/subagents/agent-*.jsonl` and carry `isSidechain`), so a helper
+     model can never be shown as the one you are talking to. Placeholder turns
+     (`<synthetic>`) are ignored.
+  2. **Planned (`◇`)** — `ANTHROPIC_MODEL`, else the `model` key in Claude Code's
+     own settings (`.claude/settings.local.json` → `.claude/settings.json` →
+     `~/.claude/settings.json`, narrowest wins; an explicit `"default"` *clears* a
+     broader pin instead of deferring to it). Claude Code writes that key itself
+     when you pick a model in its VS Code picker, or via `/model` saved as the
+     default for new sessions. Used **only** for a chat that has never answered —
+     identified through Claude Code's live-session registry
+     (`~/.claude/sessions/*.json`, written when a chat opens, before any prompt):
+     a registered session with no transcript file has never replied. Nothing is
+     guessed: with no pinned model the line says `default model` instead of
+     inventing one.
+
+  The display name comes from the same Models API response already fetched for
+  the context limit (`display_name`); offline it is derived from the model id for
+  Anthropic's own id shapes, so the model shows instantly with no network at all.
+  Ids from other deployments (Bedrock ARNs, Vertex/Foundry names, private
+  aliases) are **kept as they are**, trimmed to their identifying tail — a
+  shortener guessing at them would produce a confident wrong name.
+- **Effort** — same two sources: the `effort` field of that same turn
+  (confirmed), or `effortLevel` / `ultracode` in Claude Code's settings
+  (planned). Nothing is shown when neither exists.
+- **Subagents** — each `<session>/subagents/agent-*.jsonl` plus its sibling
+  `agent-*.meta.json` (agent type, task description, spawn depth and parent).
+  Model, effort and tokens come from the agent's own turns. Parsed once and cached
+  by mtime+size of BOTH files, so a session with dozens of agents costs nothing on
+  the redraw tick, and a description written after the log still shows up.
 
 ### Codex
 
@@ -244,6 +364,8 @@ Reload VS Code. The item appears on the right of the status bar.
 | `credentialsPath` | `""` | Override credentials file location |
 | `codex.commandPath` | `""` | Optional Codex CLI path; empty = auto-detect OpenAI/ChatGPT VS Code extension, npm global install, or PATH |
 | `context.enabled` | `true` | Show how full the model's context window is now (Models API, cached 24h) |
+| `model.enabled` | `true` | Show which model **and effort level** the session runs on at the start of the line (`◆` confirmed / `◇` planned), and flag a switch until the next reply |
+| `subagents.enabled` | `true` | Show the delegated-work breakdown (tooltip line + panel section). Session totals include subagents either way |
 
 ## Reliability — what can temporarily break (important)
 

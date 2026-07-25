@@ -14,6 +14,7 @@
 // Cost ~ a few tokens per poll; throttled + activity-gated by the caller.
 
 import * as fs from "fs";
+import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { QuotaWindow, parseRateLimitHeaders } from "./metrics";
@@ -35,6 +36,9 @@ export interface ModelWindowResult {
   id: string;
   /** max_input_tokens = the context-window limit; null on any failure (fail-visibly). */
   maxInputTokens: number | null;
+  /** Anthropic's own display name ("Claude Opus 5"), when the API returned one.
+   *  Optional: older persisted values predate this field. */
+  displayName?: string | null;
   fetchedAtSec: number;
   state: "ok" | "no-credentials" | "error";
   detail?: string;
@@ -95,34 +99,109 @@ export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 425 || status >= 500;
 }
 
-/** Fetch with escalating per-attempt timeouts + retries on transient failures.
- *  Returns the final Response (even a non-ok one — the caller inspects it), or
- *  null when every attempt threw (connect timeout / network down). Records the
- *  round-trip on a completed request so the next call can adapt. Never throws. */
-async function resilientFetch(url: string, init: RequestInit): Promise<Response | null> {
+/** How long each ADDRESS FAMILY gets to complete a connection before Node's
+ *  Happy Eyeballs abandons it and tries the next one.
+ *
+ *  Node's default is 250 ms, and that default is what silently broke this
+ *  feature on a real machine: api.anthropic.com publishes both an A and an AAAA
+ *  record; the user's IPv4 handshake took 350–550 ms while IPv6 had no route at
+ *  all. Node started the WORKING IPv4 connection, gave up on it at 250 ms,
+ *  moved to the dead IPv6 address, and the whole request died with a connect
+ *  timeout — for a month, on a link where the same request from Python answered
+ *  in 1.5 s. Two seconds is far above any real handshake yet still fails fast
+ *  enough to be invisible when a family really is unreachable. */
+const FAMILY_ATTEMPT_MS = 2000;
+
+/** A response reduced to what this module needs. */
+interface HttpResponse {
+  status: number;
+  header: (name: string) => string | null;
+  body: string;
+}
+
+/** One HTTPS request with a hard overall budget.
+ *
+ *  Deliberately Node's own `https` rather than `fetch`: it is the only way to
+ *  control the address-family attempt budget above (undici's global fetch
+ *  exposes no per-request connect options), and as a bonus it goes through any
+ *  proxy support the editor has patched into the http module — which `fetch`
+ *  never honoured. Rejects on timeout/network error; never leaks the socket. */
+function httpsRequest(
+  url: string,
+  init: { method: string; headers: Record<string, string>; body?: string },
+  timeoutMs: number,
+  family?: 4 | 6
+): Promise<HttpResponse> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port || 443,
+        path: `${u.pathname}${u.search}`,
+        method: init.method,
+        headers: init.headers,
+        autoSelectFamilyAttemptTimeout: FAMILY_ATTEMPT_MS,
+        ...(family ? { family, autoSelectFamily: false } : {}),
+      } as https.RequestOptions,
+      (res) => {
+        let body = "";
+        res.setEncoding("utf-8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode || 0,
+            header: (name) => {
+              const v = res.headers[name.toLowerCase()];
+              return Array.isArray(v) ? v[0] ?? null : v ?? null;
+            },
+            body,
+          });
+        });
+        res.on("error", reject);
+      }
+    );
+    // One hard budget for the whole exchange (connect + TLS + response), which
+    // is what the caller's escalating schedule reasons about.
+    const timer = setTimeout(() => req.destroy(new Error("timeout")), timeoutMs);
+    req.on("close", () => clearTimeout(timer));
+    req.on("error", reject);
+    if (init.body) req.write(init.body);
+    req.end();
+  });
+}
+
+/** Request with escalating per-attempt timeouts + retries on transient failures.
+ *  Returns the final response (even a non-ok one — the caller inspects it), or
+ *  null when every attempt failed (connect timeout / network down). Records the
+ *  round-trip on a completed request so the next call can adapt. Never throws.
+ *
+ *  The LAST attempt pins IPv4. By then two ordinary attempts have already
+ *  failed, so nothing is lost on an IPv6-only network — but on the common
+ *  "AAAA published, no route" home setup it turns a dead poll into a working
+ *  one. */
+async function resilientFetch(
+  url: string,
+  init: { method: string; headers: Record<string, string>; body?: string }
+): Promise<HttpResponse | null> {
   const schedule = attemptTimeoutsMs(lastRttMs);
   for (let i = 0; i < schedule.length; i++) {
     const isLast = i === schedule.length - 1;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), schedule[i]);
     const startedMs = Date.now();
     try {
-      const resp = await fetch(url, { ...init, signal: controller.signal });
-      clearTimeout(timer);
-      // Transient server error → drain and try a later, more patient attempt.
+      const resp = await httpsRequest(url, init, schedule[i], isLast ? 4 : undefined);
+      // Transient server error → try a later, more patient attempt.
       if (!isLast && resp.status !== 429 && isRetryableStatus(resp.status)) {
-        try {
-          await resp.text();
-        } catch {
-          /* ignore */
-        }
         await delay(RETRY_GAP_MS);
         continue;
       }
       lastRttMs = Date.now() - startedMs; // the link answered — remember how slow
       return resp;
     } catch {
-      clearTimeout(timer); // timeout/abort/network — retry unless this was the last
+      // timeout/network — retry unless this was the last attempt
       if (!isLast) await delay(RETRY_GAP_MS);
     }
   }
@@ -142,6 +221,8 @@ export async function fetchQuota(override: string, nowSec: number): Promise<Quot
       "anthropic-version": "2023-06-01",
       "anthropic-beta": CRED_BETA,
       "content-type": "application/json",
+      // `https` does not decompress (fetch did) — never accept an encoded body.
+      "accept-encoding": "identity",
     },
     body: JSON.stringify({
       model: QUOTA_MODEL,
@@ -162,17 +243,11 @@ export async function fetchQuota(override: string, nowSec: number): Promise<Quot
       sevenD: null,
       fetchedAtSec: nowSec,
       state: "rate-limited",
-      detail: resp.headers.get("retry-after") || "",
+      detail: resp.header("retry-after") || "",
     };
   }
 
-  const { fiveH, sevenD } = parseRateLimitHeaders((n) => resp.headers.get(n));
-  // Drain body to free the socket; we only need headers.
-  try {
-    await resp.text();
-  } catch {
-    /* ignore */
-  }
+  const { fiveH, sevenD } = parseRateLimitHeaders((n) => resp.header(n));
   if (!fiveH && !sevenD) {
     return { fiveH, sevenD, fetchedAtSec: nowSec, state: "error", detail: `http ${resp.status}, no ratelimit headers` };
   }
@@ -200,23 +275,18 @@ export async function fetchModelWindow(
       Authorization: `Bearer ${token}`,
       "anthropic-version": "2023-06-01",
       "anthropic-beta": CRED_BETA,
+      "accept-encoding": "identity",
     },
   });
   if (!resp) {
     return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: "no response (connect timeout / network)" };
   }
-  let text: string;
-  try {
-    text = await resp.text();
-  } catch (e: any) {
-    return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: String(e?.message || e) };
-  }
-  if (!resp.ok) {
+  if (resp.status < 200 || resp.status >= 300) {
     return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: `http ${resp.status}` };
   }
   let obj: any;
   try {
-    obj = JSON.parse(text);
+    obj = JSON.parse(resp.body);
   } catch {
     return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: "bad json" };
   }
@@ -224,7 +294,11 @@ export async function fetchModelWindow(
   if (typeof lim !== "number" || !Number.isFinite(lim) || lim <= 0) {
     return { id, maxInputTokens: null, fetchedAtSec: nowSec, state: "error", detail: "no max_input_tokens" };
   }
-  return { id, maxInputTokens: lim, fetchedAtSec: nowSec, state: "ok" };
+  // Same response also carries Anthropic's own display name ("Claude Opus 5") —
+  // free, no extra request. Used for the status-bar model label; absence is
+  // harmless (the label is then derived from the id, fully offline).
+  const display = typeof obj?.display_name === "string" && obj.display_name.trim() ? obj.display_name.trim() : null;
+  return { id, maxInputTokens: lim, displayName: display, fetchedAtSec: nowSec, state: "ok" };
 }
 
 /** Throttle gate: poll only if enough time passed AND the session was active

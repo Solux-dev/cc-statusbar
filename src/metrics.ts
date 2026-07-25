@@ -31,6 +31,13 @@ export type PaceLevel = "normal" | "tight" | "over";
 export interface ContextInfo {
   tokens: number | null;
   modelId: string | null;
+  /** Reasoning-effort level of that same turn ("low"|"medium"|"high"|"xhigh").
+   *  Null on older transcripts that predate the field. */
+  effort: string | null;
+  /** Id of that turn (response id / requestId). Identifies "the same turn"
+   *  across ticks, which is what lets a change notice persist until the NEXT
+   *  turn instead of expiring on a wall clock while the user is away. */
+  turnId: string | null;
 }
 
 export function emptyTotals(): Totals {
@@ -66,8 +73,17 @@ export function effectiveTokens(t: Totals, w: Weights): number {
  *  per line counts a single response 2–4× and inflates every absolute token
  *  number ~2.3–3.3×. Dedup by response id so each response is counted once.
  *  (Lines with neither id — very old/odd transcripts — fall through and are
- *  counted, as before, to avoid silently dropping data.) */
-export function sumTranscript(raw: string): Totals {
+ *  counted, as before, to avoid silently dropping data.)
+ *
+ *  `includeSidechain` picks WHICH file this is:
+ *   - false (default) — a MAIN transcript: sidechain turns are skipped, because
+ *     a subagent's tokens belong to its own agent-*.jsonl and counting them here
+ *     too would double-count them.
+ *   - true — an AGENT transcript: EVERY assistant turn in such a file is a
+ *     sidechain by definition, so skipping them summed the file to zero and made
+ *     all subagent consumption invisible (measured on a real session: 2.3M of
+ *     2.75M effective tokens — 84% — silently missing from the total). */
+export function sumTranscript(raw: string, includeSidechain = false): Totals {
   const t = emptyTotals();
   const seen = new Set<string>();
   for (const line of raw.split(/\r?\n/)) {
@@ -80,7 +96,7 @@ export function sumTranscript(raw: string): Totals {
       continue; // tolerate a partial last line mid-write
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
-    if (obj.isSidechain) continue; // subagent turn — counted via its own agent-*.jsonl, not here
+    if (obj.isSidechain && !includeSidechain) continue; // counted via its own agent-*.jsonl
     const id = obj.message.id || obj.requestId;
     if (id) {
       if (seen.has(id)) continue; // same response, another content-block line — already counted
@@ -104,6 +120,8 @@ export function sumTranscript(raw: string): Totals {
 export function lastAssistantContext(raw: string): ContextInfo {
   let tokens: number | null = null;
   let modelId: string | null = null;
+  let effort: string | null = null;
+  let turnId: string | null = null;
   for (const line of raw.split(/\r?\n/)) {
     const s = line.trim();
     if (!s) continue;
@@ -115,23 +133,76 @@ export function lastAssistantContext(raw: string): ContextInfo {
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
     if (obj.isSidechain) continue; // subagent has its OWN window — must never set main context
+    // Claude Code writes placeholder turns with model "<synthetic>" (interrupts,
+    // errors). They are not a real prompt: they must neither move the context
+    // fill nor become the displayed model / window-limit lookup key.
+    if (typeof obj.message.model === "string" && obj.message.model.startsWith("<")) continue;
     const u = obj.message.usage;
     if (!u) continue;
     // latest assistant turn with usage overwrites → ends as the last one.
     tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + cacheWriteTokens(u);
-    if (typeof obj.message.model === "string" && obj.message.model) modelId = obj.message.model;
+    // Assigned unconditionally: a newer turn that carries no model must RESET
+    // this, not inherit the previous turn's one. Presenting an older model
+    // beside newer token counts would be a confident (and wrong) reading.
+    modelId = typeof obj.message.model === "string" && obj.message.model ? obj.message.model : null;
+    // `effort` is a TOP-LEVEL field of the transcript entry (not inside
+    // message) — the reasoning level that turn actually ran at.
+    effort = typeof obj.effort === "string" && obj.effort ? obj.effort : null;
+    turnId = obj.message.id || obj.requestId || obj.uuid || null;
   }
-  return { tokens, modelId };
+  return { tokens, modelId, effort, turnId };
+}
+
+/** One subagent's transcript boiled down to what the owner needs to see: which
+ *  model the Lead handed the task to, at which effort, and what it cost. Every
+ *  turn in an agent file is a sidechain, so the sum must include them. */
+export interface AgentDigest {
+  model: string | null;
+  effort: string | null;
+  totals: Totals;
+  /** ms timestamp of the last turn — used to order the list newest-first. */
+  lastTurnMs: number;
+}
+
+/** Digest ONE agent-*.jsonl. Pure (text in, data out) → unit-testable. */
+export function agentDigest(raw: string): AgentDigest {
+  let model: string | null = null;
+  let effort: string | null = null;
+  let lastTurnMs = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (obj?.type !== "assistant" || !obj.message) continue;
+    const m = obj.message.model;
+    // A subagent runs one model for its whole life; the last real one wins.
+    if (typeof m === "string" && m && !m.startsWith("<")) model = m;
+    if (typeof obj.effort === "string" && obj.effort) effort = obj.effort;
+    const ts = Date.parse(obj.timestamp || "");
+    if (!Number.isNaN(ts) && ts > lastTurnMs) lastTurnMs = ts;
+  }
+  return { model, effort, totals: sumTranscript(raw, true), lastTurnMs };
 }
 
 /** Context-fill colour dot. Purely INFORMATIONAL: context has no reset and no
  *  consequence like a quota limit, so this dot NEVER drives the status-bar
- *  background (see buildView) — it only colours its own segment. Thresholds
- *  (owner 2026-05-31): <50% 🟢 · 50–80% 🟡 · ≥80% 🔴 — a glanceable "how much
- *  room is left for the next step". */
+ *  background (see buildView) — it only colours its own segment.
+ *
+ *  Thresholds (owner, revised 2026-07-25): <40% 🟢 · 40–60% 🟡 · ≥60% 🔴.
+ *  Deliberately EARLIER than "nearly full". With a 1M window, filling the bar is
+ *  never the goal: answer quality degrades progressively well before the limit,
+ *  and a fatter context also burns more quota per turn. So 🟡 means "start
+ *  looking for a good place to finish — ideally before auto-compaction decides
+ *  for you", and 🔴 means "wrap up and carry the rest into a fresh session".
+ *  A dot that only turned red at 80% would be warning after the damage. */
 export function contextLevel(pct: number): PaceLevel {
-  if (pct >= 80) return "over";
-  if (pct >= 50) return "tight";
+  if (pct >= 60) return "over";
+  if (pct >= 40) return "tight";
   return "normal";
 }
 

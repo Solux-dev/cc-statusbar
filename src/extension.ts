@@ -4,7 +4,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { readSessionTotals } from "./transcript";
+import { readSessionTotals, SubagentInfo } from "./transcript";
 import { fetchQuota, fetchModelWindow, shouldPoll, FAIL_RETRY_SEC, QuotaResult, ModelWindowResult } from "./quota";
 import {
   buildView,
@@ -14,9 +14,13 @@ import {
   QuotaView,
   ContextView,
   CacheView,
+  ModelView,
+  SubagentView,
+  choicesMarkdown,
 } from "./render";
-import { Weights, ContextInfo, QuotaWindow, knownModelWindow } from "./metrics";
+import { Weights, ContextInfo, QuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
 import { readLocalQuota } from "./localQuota";
+import { isRealModelId, readOpenChats, readPlannedEffort, readPlannedModel, shortModelLabel } from "./model";
 import { resolveLang, messages, Lang, LangSetting } from "./i18n";
 import { ProviderMode, ProviderSelection, UsageProviderKind } from "./providerTypes";
 import {
@@ -133,7 +137,152 @@ function cfg() {
     provider: normalizeProviderMode(c.get<string>("provider", "auto")),
     codexCommandPath: c.get<string>("codex.commandPath", ""),
     contextEnabled: c.get<boolean>("context.enabled", true),
+    modelEnabled: c.get<boolean>("model.enabled", true),
+    subagentsEnabled: c.get<boolean>("subagents.enabled", true),
   };
+}
+
+// ── model identity ───────────────────────────────────────────────────────────
+// A change notice stays up until the NEXT confirmed turn — not for N seconds.
+// A wall clock would quietly expire while the user is away from the keyboard,
+// which is exactly when a switch goes unnoticed; "until the model speaks again"
+// is both deterministic and impossible to miss.
+interface IdentityChange {
+  from: string;
+  to: string;
+  /** Turn the change was first seen on. Cleared once a LATER turn appears. */
+  turnId: string | null;
+}
+
+/** Last CONFIRMED identity for the current workspace, persisted so a window
+ *  reload neither re-fires nor loses a pending change notice. */
+interface IdentityState {
+  modelId: string | null;
+  effort: string | null;
+  modelChange: IdentityChange | null;
+  effortChange: IdentityChange | null;
+}
+let identity: IdentityState = { modelId: null, effort: null, modelChange: null, effortChange: null };
+let identityCwd: string | null = null;
+
+function identityKey(cwd: string): string {
+  return `identity:${cwd}`;
+}
+
+function saveIdentity(cwd: string): void {
+  void extCtx?.globalState.update(identityKey(cwd), identity);
+}
+
+/** Pretty label for a model id, preferring Anthropic's own display name from
+ *  the /v1/models response we already cache for the context-window limit. */
+function labelFor(id: string | null): string | null {
+  if (!id) return null;
+  return shortModelLabel(id, modelLimits.get(id)?.displayName ?? null);
+}
+
+/** Which model is in play, and with what provenance.
+ *
+ *  CONFIRMED wins whenever the newest transcript has a real turn — including for
+ *  a RESUMED session, whose transcript already exists (downgrading a known fact
+ *  to an expectation just because the process restarted would lose information).
+ *  The PLANNED value describes only chats that have never answered: those are
+ *  identified by a live registry entry with no transcript file at all.
+ *
+ *  When such an unanswered chat sits beside an active one, the bar cannot know
+ *  which tab is focused (VS Code has no API for it), so it names the other chat's
+ *  model instead of silently picking one — but only when the two differ, so the
+ *  line stays quiet whenever nothing can go wrong. */
+function buildModelView(
+  ctxInfo: ContextInfo,
+  cwd: string,
+  enabled: boolean
+): ModelView | undefined {
+  if (!enabled) return undefined;
+
+  // A workspace switch (new window/folder) must not inherit another folder's
+  // identity — that would fire a phantom "model changed".
+  if (identityCwd !== cwd) {
+    identityCwd = cwd;
+    identity = extCtx?.globalState.get<IdentityState>(identityKey(cwd)) ?? {
+      modelId: null,
+      effort: null,
+      modelChange: null,
+      effortChange: null,
+    };
+  }
+
+  const chats = readOpenChats(cwd);
+  const actualId = isRealModelId(ctxInfo.modelId) ? (ctxInfo.modelId as string) : null;
+
+  // What an unanswered chat would start on (null when there is no such chat).
+  const plannedModel = chats.unanswered.length ? readPlannedModel(cwd) : null;
+  const plannedEffort = chats.unanswered.length ? readPlannedEffort(cwd) : null;
+
+  if (!actualId) {
+    // Nothing has answered here at all → the plan is all there is to show.
+    const planned = plannedModel ?? readPlannedModel(cwd);
+    const effort = plannedEffort ?? readPlannedEffort(cwd);
+    const label = shortModelLabel(planned.id);
+    return planned.id
+      ? { label, state: "planned", effort }
+      : { label: null, state: "planned-default", effort };
+  }
+
+  const label = labelFor(actualId);
+  const effort = ctxInfo.effort;
+  const turnId = ctxInfo.turnId;
+
+  // A notice is raised on the first turn that shows the new value, and cleared
+  // as soon as a LATER turn confirms the user has moved on.
+  if (actualId !== identity.modelId) {
+    const from = labelFor(identity.modelId);
+    // The first observation ever has nothing to compare against → stay silent.
+    if (from && label && from !== label) identity.modelChange = { from, to: label, turnId };
+    identity.modelId = actualId;
+    saveIdentity(cwd);
+  } else if (identity.modelChange && identity.modelChange.turnId !== turnId) {
+    identity.modelChange = null;
+    saveIdentity(cwd);
+  }
+  if (effort && effort !== identity.effort) {
+    if (identity.effort) identity.effortChange = { from: identity.effort, to: effort, turnId };
+    identity.effort = effort;
+    saveIdentity(cwd);
+  } else if (identity.effortChange && identity.effortChange.turnId !== turnId) {
+    identity.effortChange = null;
+    saveIdentity(cwd);
+  }
+
+  // Only warn about the other chat when it would actually run something else.
+  const pendingLabel = plannedModel?.id ? shortModelLabel(plannedModel.id) : null;
+  const pending = chats.unanswered.length && pendingLabel !== label ? pendingLabel : null;
+
+  return {
+    label,
+    state: "actual",
+    changedFrom: identity.modelChange?.to === label ? identity.modelChange.from : null,
+    effort,
+    effortChangedFrom: identity.effortChange?.to === effort ? identity.effortChange.from : null,
+    pendingLabel: pending,
+  };
+}
+
+/** Reduce the raw subagent records to display data (labels + one comparable
+ *  token number), newest first — transcript.ts already sorts them. */
+function buildSubagentViews(subagents: SubagentInfo[], weights: Weights): SubagentView[] {
+  return subagents
+    .map((a) => ({
+      agentType: a.agentType,
+      description: a.description,
+      modelId: a.model,
+      modelLabel: labelFor(a.model),
+      effort: a.effort,
+      spawnDepth: a.spawnDepth,
+      effective: effectiveTokens(a.totals, weights),
+    }))
+    // Most expensive first: this list answers "where did my tokens go", so the
+    // biggest spender must never fall below the display cap.
+    .sort((a, b) => b.effective - a.effective);
 }
 
 function escHtml(s: string): string {
@@ -166,6 +315,7 @@ function showProviderNotice(selection: Exclude<ProviderSelection, { kind: "selec
     item.text = m.providerConflictText;
     const md = new vscode.MarkdownString(m.providerConflictTooltip);
     md.isTrusted = { enabledCommands: TRUSTED_COMMANDS };
+    md.supportHtml = true;
     item.tooltip = md;
     item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     item.show();
@@ -181,6 +331,7 @@ function showProviderNotice(selection: Exclude<ProviderSelection, { kind: "selec
   item.text = m.providerUnavailableText(provider);
   const md = new vscode.MarkdownString(m.providerUnavailableTooltip(provider, detail));
   md.isTrusted = { enabledCommands: TRUSTED_COMMANDS };
+  md.supportHtml = true; // the selected provider/language is highlighted with an inline span
   item.tooltip = md;
   item.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
   item.show();
@@ -203,30 +354,22 @@ function providerChoicesMarkdown(
   selectedMode: ProviderMode,
   workingProvider: UsageProviderKind | null
 ): string {
-  const choices: Array<{ mode: ProviderMode; command: string }> = [
-    { mode: "auto", command: "ccStatusbar.useAuto" },
-    { mode: "claude", command: "ccStatusbar.useClaude" },
-    { mode: "codex", command: "ccStatusbar.useCodex" },
-  ];
-  const rendered = choices.map(({ mode, command }) => {
-    const dot = workingProvider === mode ? "🟢 " : "";
-    const label = `${dot}${m.providerNames[mode]}`;
-    return selectedMode === mode ? `**${label}**` : `[${label}](command:${command})`;
-  });
-  return `**${m.chooseProvider}:** ${rendered.join(" · ")}`;
+  // The dot is a DIFFERENT signal from the check: it means "this source has data
+  // right now", not "this one is selected".
+  const dot = (kind: UsageProviderKind): string => (workingProvider === kind ? "🟢 " : "");
+  return choicesMarkdown<ProviderMode>(m.chooseProvider, selectedMode, [
+    { value: "auto", label: m.providerNames.auto, command: "ccStatusbar.useAuto" },
+    { value: "claude", label: `${dot("claude")}${m.providerNames.claude}`, command: "ccStatusbar.useClaude" },
+    { value: "codex", label: `${dot("codex")}${m.providerNames.codex}`, command: "ccStatusbar.useCodex" },
+  ]);
 }
 
 function languageChoicesMarkdown(m: ReturnType<typeof messages>, selected: LangSetting): string {
-  const choices: Array<{ value: LangSetting; command: string }> = [
-    { value: "auto", command: "ccStatusbar.useLanguageAuto" },
-    { value: "ru", command: "ccStatusbar.useLanguageRu" },
-    { value: "en", command: "ccStatusbar.useLanguageEn" },
-  ];
-  const rendered = choices.map(({ value, command }) => {
-    const label = m.languageNames[value];
-    return selected === value ? `**${label}**` : `[${label}](command:${command})`;
-  });
-  return `**${m.languageChoicesHeader}:** ${rendered.join(" · ")}`;
+  return choicesMarkdown<LangSetting>(m.languageChoicesHeader, selected, [
+    { value: "auto", label: m.languageNames.auto, command: "ccStatusbar.useLanguageAuto" },
+    { value: "ru", label: m.languageNames.ru, command: "ccStatusbar.useLanguageRu" },
+    { value: "en", label: m.languageNames.en, command: "ccStatusbar.useLanguageEn" },
+  ]);
 }
 
 /** Resolve the cached context-window limit for a model, kicking off a
@@ -378,6 +521,7 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
     `${view.tooltip}\n\n${providerChoicesMarkdown(m, conf.provider, workingProvider)}\n\n${languageChoicesMarkdown(m, conf.language)}`
   );
   md.isTrusted = { enabledCommands: TRUSTED_COMMANDS };
+  md.supportHtml = true; // the selected provider/language is highlighted with an inline span
   item.tooltip = md;
   item.backgroundColor =
     view.level === "over"
@@ -423,7 +567,7 @@ async function tick() {
     return;
   }
 
-  const { totals, mtimeMs, context, cacheTier, cacheHitRatePct } = readSessionTotals(cwd);
+  const { totals, mtimeMs, context, cacheTier, cacheHitRatePct, leadTotals, subagents } = readSessionTotals(cwd);
   const nowSec = Math.floor(Date.now() / 1000);
 
   const selection = resolveProvider({
@@ -545,7 +689,19 @@ async function tick() {
     }
   }
 
-  const view = buildView(totals, conf.weights, quotaView, nowSec, lang, contextView, cacheView);
+  const modelView = buildModelView(context, cwd, conf.modelEnabled);
+  const subagentViews = conf.subagentsEnabled ? buildSubagentViews(subagents, conf.weights) : [];
+  const view = buildView(
+    totals,
+    conf.weights,
+    quotaView,
+    nowSec,
+    lang,
+    contextView,
+    cacheView,
+    modelView,
+    subagentViews
+  );
   item.text = view.text;
   const providerFooter =
     `_${m.providerTooltipLine(m.providerNames[conf.provider], m.providerNames.claude)}_` +
@@ -555,6 +711,7 @@ async function tick() {
   // trusted so the tooltip's command links are clickable; only our own
   // ccStatusbar.* commands are referenced.
   md.isTrusted = { enabledCommands: TRUSTED_COMMANDS };
+  md.supportHtml = true; // the selected provider/language is highlighted with an inline span
   item.tooltip = md;
   item.backgroundColor =
     view.level === "over"
@@ -567,7 +724,18 @@ async function tick() {
   // keep the (optional) persistent panel live
   if (panel) {
     panel.title = m.panelTitle;
-    panel.webview.html = buildPanelHtml(totals, conf.weights, quotaView, nowSec, lang, contextView, cacheView);
+    panel.webview.html = buildPanelHtml(
+      totals,
+      conf.weights,
+      quotaView,
+      nowSec,
+      lang,
+      contextView,
+      cacheView,
+      modelView,
+      subagentViews,
+      effectiveTokens(leadTotals, conf.weights)
+    );
   }
 }
 
