@@ -135,6 +135,9 @@ export interface Messages {
   // tooltip note when the shown quota is a last-known reading (e.g. fetched a
   // while ago, or read from the local statusline bridge): "updated N ago".
   quotaAsOf: (ago: string) => string;
+  // shown while a 429 backoff is holding the poll: names WHY the number is not
+  // moving and when it will resume. Plain text — the caller adds emphasis.
+  quotaPaused: (left: string) => string;
   // panel line for a non-live reading: "Last known: 5h 1%, 7d 10% (updated N ago)".
   quotaLastKnown: (windows: string, ago: string) => string;
   localAlwaysAccurate: string;
@@ -278,6 +281,7 @@ const EN: Messages = {
     error: "$(cloud-offline) quota offline",
   },
   quotaAsOf: (ago) => `_Updated ${ago} ago._`,
+  quotaPaused: (left) => `Polling paused by the server (rate limit) — resumes in ${left}. Click to retry now.`,
   quotaLastKnown: (windows, ago) => `Last known: ${windows} (updated ${ago} ago)`,
   localAlwaysAccurate:
     "_Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights._",
@@ -441,6 +445,7 @@ const RU: Messages = {
     error: "$(cloud-offline) лимиты офлайн",
   },
   quotaAsOf: (ago) => `_Обновлено ${ago} назад._`,
+  quotaPaused: (left) => `Опрос на паузе по требованию сервера (лимит запросов) — возобновится через ${left}. Клик — повторить сейчас.`,
   quotaLastKnown: (windows, ago) => `Последнее известное: ${windows} (обновлено ${ago} назад)`,
   localAlwaysAccurate:
     "_Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения._",

@@ -3,6 +3,76 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.23] — 2026-08-09
+
+### Fixed
+
+- **The limits stopped updating the moment you stopped typing — and clicking to
+  refresh could not fix it.** Both symptoms came from one gate. Polling was
+  allowed only while the session transcript had been touched in the last
+  `quota.minPollSeconds`, so after a few idle minutes the 5h/7d numbers froze at
+  their last reading and the bar fell back to its neutral offline marker. The
+  refresh command zeroed the throttles but **not** that gate, so a click issued
+  no request at all — it just repainted the same figures. Which is the worst
+  possible pairing: the check you reach for when a number looks stale is the one
+  guaranteed to be swallowed, because looking stale *is* being idle.
+
+  The gate was written when the only way to read the limits was a request that
+  spent a token, and "don't spend tokens on an idle editor" was right. Since
+  1.0.22 the primary source is a plain `GET` that costs nothing — the reason had
+  expired, the gate had not. It now applies **only** to the paid header poll:
+
+  - **The free usage route polls on a fixed cadence, idle or not** — once per
+    `quota.minPollSeconds` (default 300s). Walk away for two hours and the 5h,
+    7d and per-model weekly windows are still current when you glance back,
+    which is the whole point during a long autonomous run.
+  - **A click overrides every gate** — throttle, activity window and rate-limit
+    backoff alike — bounded by a 10-second anti-spam floor.
+  - **Open editor windows share one poll** via
+    `~/.claude/.cc-statusbar-usage.json`, so N windows still make one request
+    per interval rather than N. A window that skips its own request still shows
+    the reading the request that *did* run brought home.
+
+- **One 429 no longer takes the whole feature off the air for an hour.** Both
+  routes shared a single backoff timer, so a `Retry-After: 3600` from the free
+  GET also gagged the independent header poll. They now back off separately, and
+  the free route's backoff is **capped at 15 minutes**: the only two 429s ever
+  observed on it arrived in the same second as a `401` on the other route —
+  i.e. while the on-disk OAuth token was briefly expired — and obeying an hour
+  of silence over a token the CLI refreshed 47 seconds later is a cure worse
+  than the disease. The paid route still honours `Retry-After` verbatim.
+
+- **A paused poll now says so.** The tooltip and panel state "polling paused by
+  the server — resumes in N", instead of leaving a number to age with no stated
+  reason. An unexplained stale reading is the one failure nobody can report.
+
+### Notes
+
+- No new token cost: the cadence change applies only to the zero-token route.
+- A persistently failing usage route gets 3 quick retries before settling back
+  to the normal interval, so an offline machine no longer retries forever now
+  that idleness alone does not stop it.
+- **Everything remembered is keyed by account.** The shared file's name carries
+  a fingerprint of the resolved `credentialsPath`, and so do the persisted
+  last-known readings — so switching credential files (even between sessions)
+  can no longer put one account's percentages on another's bar. A reading across
+  accounts is a *wrong* figure, not a stale one. An answer that arrives after a
+  switch is discarded rather than applied.
+- **One request per interval per machine, not per window.** Windows take a
+  short-lived, expiring claim before polling, so several opening at once do not
+  all fetch the same number. The claim expires on its own, and can only be
+  released by the window that took it, so neither a crash nor a suspend can
+  block the others — and if the claim cannot be written at all (read-only home,
+  permissions), every window simply polls, because a coordination file must
+  never become a way for the limits to go quiet.
+- **A custom `credentialsPath` no longer borrows the default account's files.**
+  Claude Code writes its statusLine bridge and `~/.claude.json` cache for
+  whoever *it* is signed in as, so on a non-default credentials file those two
+  sources are now skipped rather than merged in.
+- **`Retry-After` is read in both of its legal forms.** An HTTP-date used to
+  parse as `NaN` — i.e. as "the server asked for nothing" — so a route that had
+  named an exact time to wait for could be retried early.
+
 ## [1.0.22] — 2026-07-26
 
 ### Added

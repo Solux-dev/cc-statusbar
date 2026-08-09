@@ -59,9 +59,16 @@ export interface ModelWindowResult {
   detail?: string;
 }
 
-function credentialsPath(override: string): string {
+/** Which credentials file a given setting resolves to. Exported because the
+ *  cross-window share keys on it: two windows pointed at DIFFERENT credential
+ *  files are two different accounts, and must never read each other's numbers. */
+export function resolveCredentialsPath(override: string): string {
   if (override && override.trim()) return override.trim();
   return path.join(os.homedir(), ".claude", ".credentials.json");
+}
+
+function credentialsPath(override: string): string {
+  return resolveCredentialsPath(override);
 }
 
 /** Read the OAuth access token from the local credentials file. */
@@ -365,37 +372,131 @@ export async function fetchModelWindow(
   return { id, maxInputTokens: lim, displayName: display, fetchedAtSec: nowSec, state: "ok" };
 }
 
-/** Throttle gate: poll only if enough time passed AND the session was active
- *  recently (avoids the documented 429 bug + wasted tokens while idle).
+/** Smallest gap between two FORCED polls. A forced poll is an explicit human
+ *  action (clicking the status-bar item), so it overrides every automatic gate —
+ *  but a double-click must not become a request burst, hence this floor. */
+export const FORCE_MIN_GAP_SEC = 10;
+
+/** Upper bound on a 429 backoff for the FREE usage route.
+ *
+ *  The documented header route honours `Retry-After` verbatim — it spends
+ *  tokens, so being told to wait an hour is a fair instruction to obey. The
+ *  usage route is an undocumented plain GET, and the only two 429s we have ever
+ *  observed on it both arrived in the same second as a 401 on the header route,
+ *  i.e. while the on-disk OAuth token was expired — an auth rejection, not a
+ *  volume one. Obeying its `Retry-After: 3600` therefore blanked the whole
+ *  feature for an hour over a token the CLI refreshed 47 seconds later. We still
+ *  back off — just not past the point where the backoff is worse than the
+ *  problem. */
+export const USAGE_BACKOFF_MAX_SEC = 15 * 60;
+
+/** When a 429 backoff should end: the server's `Retry-After`, floored at our own
+ *  poll interval (never hammer) and capped at `maxSec` (never disappear). Pure. */
+export function backoffUntil(
+  nowSec: number,
+  retryAfterSec: number,
+  minSec: number,
+  maxSec: number = Number.POSITIVE_INFINITY
+): number {
+  const asked = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec : 0;
+  return nowSec + Math.min(Math.max(asked, minSec), maxSec);
+}
+
+/** Throttle gate for the PAID header poll: enough time passed AND the session
+ *  was active recently. The activity condition is what keeps an idle editor from
+ *  spending a token every few minutes on a number that cannot have moved.
  *
  *  `throttleSec` is the minimum gap between polls — the caller shortens it after
  *  a FAILED poll so a flaky link (where the request times out but recovers
  *  seconds later) is retried in ~a minute instead of staying stale for the full
  *  poll interval. `activityWindowSec` (defaults to throttleSec for backward
  *  compatibility) is kept at the NORMAL interval so shortening the retry gap
- *  does not also shrink the "is the user active?" window. */
+ *  does not also shrink the "is the user active?" window.
+ *
+ *  `forced` = the user clicked the item. It bypasses the throttle, the activity
+ *  window AND the backoff, because a gate the user cannot override is not a
+ *  refresh button — it just repaints the same stale numbers. */
 export function shouldPoll(
   lastFetchSec: number,
   nowSec: number,
   throttleSec: number,
   lastActivityMs: number,
   rateLimitedUntilSec: number,
-  activityWindowSec: number = throttleSec
+  activityWindowSec: number = throttleSec,
+  forced = false
 ): boolean {
+  if (forced) return nowSec - lastFetchSec >= FORCE_MIN_GAP_SEC;
   if (nowSec < rateLimitedUntilSec) return false; // backing off after a 429
   if (nowSec - lastFetchSec < throttleSec) return false;
   const activeRecently = lastActivityMs > 0 && Date.now() - lastActivityMs < activityWindowSec * 1000;
   return activeRecently;
 }
 
-/** Whether the free usage payload is currently doing the header poll's job —
- *  i.e. it answered recently AND carried the 5h/7d windows. While this holds,
- *  the caller skips the 1-token message poll entirely; the moment the payload
- *  route fails or stops carrying them, the poll resumes on its own. Pure. */
+/** Throttle gate for the FREE usage route — deliberately WITHOUT the activity
+ *  condition above.
+ *
+ *  That condition exists to avoid spending tokens on an idle editor. This route
+ *  is a plain GET: it generates no message and costs ZERO tokens, so the reason
+ *  never applied to it — it was inherited by sharing the paid route's gate. And
+ *  the cost of keeping it is exactly the failure it was never meant to cause:
+ *  the numbers freeze the moment the human stops typing, which is precisely when
+ *  a long autonomous run is burning the quota they are trying to watch.
+ *
+ *  So: poll on a fixed cadence, idle or not. Pure. */
+export function shouldPollFree(
+  lastFetchSec: number,
+  nowSec: number,
+  throttleSec: number,
+  backoffUntilSec: number,
+  forced = false
+): boolean {
+  if (forced) return nowSec - lastFetchSec >= FORCE_MIN_GAP_SEC;
+  if (nowSec < backoffUntilSec) return false; // backing off after a 429
+  return nowSec - lastFetchSec >= throttleSec;
+}
+
+/** Whether SOME reading is currently doing the header poll's job — it is recent
+ *  and it carries the 5h/7d windows. While that holds, the 1-token message poll
+ *  is skipped entirely.
+ *
+ *  Deliberately takes loose parts rather than a UsageResult: the qualifying
+ *  reading may equally be one THIS window fetched or one another window fetched
+ *  and shared. Judging only our own would have every extra editor window fall
+ *  back to the paid poll while a perfectly good free reading sat in the shared
+ *  file — N-1 paid requests per interval to learn a number already on disk.
+ *  Pure. */
+export function coversQuota(
+  fiveH: QuotaWindow | null,
+  sevenD: QuotaWindow | null,
+  atSec: number,
+  nowSec: number,
+  maxAgeSec: number
+): boolean {
+  if (!fiveH && !sevenD) return false;
+  if (atSec <= 0) return false;
+  return nowSec - atSec < maxAgeSec;
+}
+
+/** The above, for a reading this window fetched itself. Pure. */
 export function usageCoversQuota(usage: UsageResult | null, nowSec: number, maxAgeSec: number): boolean {
   if (!usage || usage.state !== "ok") return false;
-  if (!usage.fiveH && !usage.sevenD) return false;
-  return nowSec - usage.fetchedAtSec < maxAgeSec;
+  return coversQuota(usage.fiveH, usage.sevenD, usage.fetchedAtSec, nowSec, maxAgeSec);
+}
+
+/** `Retry-After` → seconds to wait. The header has TWO legal forms and only one
+ *  of them is a number: an HTTP-date is equally valid, and running it through
+ *  `Number()` yields NaN, i.e. "the server asked for nothing" — so we would have
+ *  retried a route that had just told us to wait until a specific time. Returns
+ *  0 when the header is absent or unparseable, which the caller floors at its
+ *  own interval. Pure. */
+export function parseRetryAfterSec(raw: unknown, nowSec: number): number {
+  if (typeof raw === "number") return Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : 0;
+  if (typeof raw !== "string" || !raw.trim()) return 0;
+  const s = raw.trim();
+  const delta = Number(s);
+  if (Number.isFinite(delta)) return Math.max(0, Math.round(delta));
+  const atMs = Date.parse(s);
+  return Number.isFinite(atMs) ? Math.max(0, Math.round(atMs / 1000) - nowSec) : 0;
 }
 
 /** Seconds to wait before retrying after a FAILED poll (timeout / network). Much

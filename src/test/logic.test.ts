@@ -27,7 +27,30 @@ import {
   toUnixSec,
 } from "../usage";
 import { resolveLang, messages } from "../i18n";
-import { attemptTimeoutsMs, isRetryableStatus, shouldPoll, usageCoversQuota, FAIL_RETRY_SEC } from "../quota";
+import {
+  attemptTimeoutsMs,
+  backoffUntil,
+  coversQuota,
+  isRetryableStatus,
+  parseRetryAfterSec,
+  resolveCredentialsPath,
+  shouldPoll,
+  shouldPollFree,
+  usageCoversQuota,
+  FAIL_RETRY_SEC,
+  FORCE_MIN_GAP_SEC,
+  USAGE_BACKOFF_MAX_SEC,
+} from "../quota";
+import {
+  accountKey,
+  claimUsagePoll,
+  parseSharedUsage,
+  readSharedUsage,
+  releaseUsagePoll,
+  sharePath,
+  usableSharedAtSec,
+  writeSharedUsage,
+} from "../usageShare";
 import { projectSlug } from "../transcript";
 import {
   deriveLabel,
@@ -1042,6 +1065,242 @@ test("shouldPoll: shorter throttle after a failure still gated by activity windo
   assert.equal(shouldPoll(now - 50, now, FAIL_RETRY_SEC, active, 0, 300), true);
   // idle (no recent activity) → still no poll even on the short retry gap
   assert.equal(shouldPoll(now - 50, now, FAIL_RETRY_SEC, Date.now() - 10 * 60 * 1000, 0, 300), false);
+});
+
+test("shouldPoll: a click overrides the activity window, the throttle AND the backoff", () => {
+  const now = 1_000_000;
+  const idle = Date.now() - 40 * 60 * 1000; // away from the keyboard for 40 min
+  // This is the whole bug the flag exists for: the user clicks BECAUSE the
+  // number looks stale, and staleness implies idleness, so the gate swallowed
+  // every click that could ever have mattered.
+  assert.equal(shouldPoll(now - 5, now, 300, idle, 0, 300), false);
+  assert.equal(shouldPoll(now - 300, now, 300, idle, now + 3600, 300, true), true);
+  // ...but a double-click is not a request burst: the anti-spam floor holds.
+  assert.equal(shouldPoll(now - (FORCE_MIN_GAP_SEC - 1), now, 300, idle, 0, 300, true), false);
+  assert.equal(shouldPoll(now - FORCE_MIN_GAP_SEC, now, 300, idle, 0, 300, true), true);
+});
+
+test("shouldPollFree: the zero-token route polls on cadence whether or not the user is active", () => {
+  const now = 1_000_000;
+  // No activity argument exists at all — that is the point. Idle for hours, the
+  // 5h/7d numbers still refresh every interval, which is what makes a glance at
+  // the bar during a long autonomous run mean anything.
+  assert.equal(shouldPollFree(now - 300, now, 300, 0), true);
+  assert.equal(shouldPollFree(now - 299, now, 300, 0), false); // throttle still holds
+  // a 429 backoff silences it until it expires...
+  assert.equal(shouldPollFree(now - 600, now, 300, now + 60), false);
+  assert.equal(shouldPollFree(now - 600, now, 300, now - 1), true);
+  // ...unless the user asks explicitly.
+  assert.equal(shouldPollFree(now - 600, now, 300, now + 3600, true), true);
+  assert.equal(shouldPollFree(now - 1, now, 300, 0, true), false); // anti-spam floor
+});
+
+test("backoffUntil: floored at our interval, and capped only where a cap is asked for", () => {
+  const now = 1_000_000;
+  // Server asks for less than our own cadence → we wait our cadence anyway.
+  assert.equal(backoffUntil(now, 10, 300), now + 300);
+  // Missing/garbage Retry-After → same floor, never a zero-length backoff.
+  assert.equal(backoffUntil(now, NaN, 300), now + 300);
+  assert.equal(backoffUntil(now, 0, 300), now + 300);
+  // The PAID route honours an hour verbatim: no cap passed.
+  assert.equal(backoffUntil(now, 3600, 300), now + 3600);
+  // The FREE route caps it — this exact case (Retry-After: 3600 alongside an
+  // expired token) is what blanked the feature for an hour.
+  assert.equal(backoffUntil(now, 3600, 300, USAGE_BACKOFF_MAX_SEC), now + USAGE_BACKOFF_MAX_SEC);
+});
+
+test("parseSharedUsage: another window's reading is validated, never trusted", () => {
+  const good = parseSharedUsage(
+    JSON.stringify({
+      fiveH: { pct: 12, resetAt: 1_700_000_000 },
+      sevenD: { pct: 68, resetAt: null },
+      scoped: [{ label: "Fable", pct: 80, resetAt: 1_700_000_000 }],
+      fetchedAtSec: 1_699_999_000,
+    })
+  );
+  assert.equal(good.ok, true);
+  assert.equal(good.fiveH?.pct, 12);
+  assert.equal(good.sevenD?.resetAt, null);
+  assert.deepEqual(good.scoped, [{ label: "Fable", pct: 80, resetAt: 1_700_000_000 }]);
+
+  // No clock → the reading cannot be compared against the other sources on
+  // freshness, so it is worthless rather than "probably current".
+  assert.equal(parseSharedUsage(JSON.stringify({ fiveH: { pct: 12 } })).ok, false);
+  // Half-written / wrong-typed fields are dropped individually, not guessed.
+  const partial = parseSharedUsage(JSON.stringify({ fiveH: { pct: "12" }, fetchedAtSec: 1 }));
+  assert.equal(partial.fiveH, null);
+  assert.equal(partial.ok, false);
+  const unlabelled = parseSharedUsage(JSON.stringify({ scoped: [{ pct: 80 }], fetchedAtSec: 1 }));
+  assert.deepEqual(unlabelled.scoped, []);
+  // Truncated file mid-write → empty, never a throw.
+  assert.equal(parseSharedUsage('{"fiveH":{"pct":1').ok, false);
+  assert.equal(parseSharedUsage("").ok, false);
+});
+
+test("usableSharedAtSec: a future-dated shared reading is refused, not trusted", () => {
+  const now = 1_000_000;
+  const base = { fiveH: { pct: 5, resetAt: null }, sevenD: null, scoped: [], ok: true };
+  assert.equal(usableSharedAtSec({ ...base, fetchedAtSec: now - 60 }, now), now - 60);
+  assert.equal(usableSharedAtSec({ ...base, fetchedAtSec: now }, now), now); // same second is fine
+  // A clock ahead of ours would (a) say "someone just polled" forever, freezing
+  // this window's cadence, and (b) win the freshest-wins merge permanently,
+  // since the winner is kept and persisted. Both are silent failures.
+  assert.equal(usableSharedAtSec({ ...base, fetchedAtSec: now + 1 }, now), 0);
+  assert.equal(usableSharedAtSec({ ...base, fetchedAtSec: 4_000_000_000 }, now), 0);
+  assert.equal(usableSharedAtSec({ ...base, ok: false, fetchedAtSec: now - 60 }, now), 0);
+});
+
+test("coversQuota: a reading from ANOTHER window also spares the paid poll", () => {
+  const now = 1_000_000;
+  const w = { pct: 12, resetAt: null };
+  // The point of the loose signature: this is a SHARED reading, not a
+  // UsageResult. Judging coverage by our own fetch alone sent every extra editor
+  // window to the paid route each interval for a number already on disk.
+  assert.equal(coversQuota(w, null, now - 60, now, 600), true);
+  assert.equal(coversQuota(null, w, now - 60, now, 600), true);
+  // too old / no windows / no clock → the paid safety net must take over
+  assert.equal(coversQuota(w, null, now - 900, now, 600), false);
+  assert.equal(coversQuota(null, null, now - 60, now, 600), false);
+  assert.equal(coversQuota(w, null, 0, now, 600), false);
+});
+
+test("parseRetryAfterSec: both legal header forms, and neither one guessed at", () => {
+  const now = 1_700_000_000;
+  assert.equal(parseRetryAfterSec("3600", now), 3600); // delta-seconds
+  assert.equal(parseRetryAfterSec(120, now), 120);
+  // HTTP-date — the form that used to become NaN, i.e. "the server asked for
+  // nothing", so we retried a route that had named an exact time to wait for.
+  assert.equal(parseRetryAfterSec(new Date((now + 300) * 1000).toUTCString(), now), 300);
+  // A date already in the past means "you may retry now", not a negative wait.
+  assert.equal(parseRetryAfterSec(new Date((now - 300) * 1000).toUTCString(), now), 0);
+  // Absent/garbage → 0, which the caller floors at its own interval.
+  assert.equal(parseRetryAfterSec("", now), 0);
+  assert.equal(parseRetryAfterSec("soon", now), 0);
+  assert.equal(parseRetryAfterSec(undefined, now), 0);
+});
+
+test("accountKey: two credential files never share a quota reading", () => {
+  const a = resolveCredentialsPath("");
+  const b = resolveCredentialsPath("D:/work/other-account/.credentials.json");
+  assert.notEqual(accountKey(a), accountKey(b));
+  assert.notEqual(sharePath(a), sharePath(b));
+  // On Windows, different spellings of one path are one file → SAME key, or the
+  // share silently fragments and every window polls for itself.
+  assert.equal(
+    accountKey("C:/Users/x/.claude/.credentials.json", "win32"),
+    accountKey("C:\\Users\\X\\.claude\\.credentials.json", "win32")
+  );
+  // Elsewhere case is significant: folding it would merge two real accounts into
+  // one share, which is the failure this key exists to prevent.
+  assert.notEqual(
+    accountKey("/home/x/.claude/.credentials.json", "linux"),
+    accountKey("/home/X/.claude/.credentials.json", "linux")
+  );
+  // Stable across calls (it keys a file name, so drift would orphan readings).
+  assert.equal(accountKey(a), accountKey(a));
+  assert.match(sharePath(a), /\.cc-statusbar-usage-[0-9a-f]{16}\.json$/);
+});
+
+test("writeSharedUsage: yields to a newer reading, but never to an impossible one", () => {
+  const fs = require("node:fs") as typeof import("fs");
+  const os = require("node:os") as typeof import("os");
+  const path = require("node:path") as typeof import("path");
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ccsb-")), "share.json");
+  const cred = "/tmp/creds.json";
+  const at = 1_700_000_000;
+  const win = (pct: number) => ({ fiveH: { pct, resetAt: null }, sevenD: null, scoped: [] });
+
+  writeSharedUsage(cred, win(10), at, file);
+  assert.equal(readSharedUsage(cred, file).fiveH?.pct, 10);
+
+  // An older reading finishing late must not replace a newer one: windows
+  // already running only accept fresher, but one opening next would read the
+  // regressed value as the best available.
+  writeSharedUsage(cred, win(20), at - 60, file);
+  assert.equal(readSharedUsage(cred, file).fiveH?.pct, 10);
+
+  // A newer one is exactly what the file is for.
+  writeSharedUsage(cred, win(30), at + 60, file);
+  assert.equal(readSharedUsage(cred, file).fiveH?.pct, 30);
+
+  // A file dated in the far future is a broken clock, not a faster window.
+  // Yielding to it would be PERMANENT: readers reject a future date, so the
+  // share would be unusable and unrepairable at the same time.
+  fs.writeFileSync(file, JSON.stringify({ ...win(99), fetchedAtSec: at + 40 * 86400 }), "utf-8");
+  writeSharedUsage(cred, win(40), at + 120, file);
+  assert.equal(readSharedUsage(cred, file).fiveH?.pct, 40);
+
+  // No stray temp files left behind.
+  const dir = path.dirname(file);
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")), []);
+});
+
+test("claimUsagePoll: exactly one window polls, and a dead one blocks nobody", () => {
+  const fs = require("node:fs") as typeof import("fs");
+  const os = require("node:os") as typeof import("os");
+  const path = require("node:path") as typeof import("path");
+  const share = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "ccsb-")), "share.json");
+  const cred = "/tmp/creds.json";
+  const now = 1_700_000_000;
+
+  // First window in wins; the others use what it will publish.
+  const held = claimUsagePoll(cred, now, 60, share);
+  assert.ok(held);
+  assert.equal(claimUsagePoll(cred, now, 60, share), null);
+  assert.equal(claimUsagePoll(cred, now + 59, 60, share), null);
+  // A contender whose clock reads a second EARLIER must not decide the winner's
+  // brand-new claim is impossible and steal it — that would defeat the claim in
+  // exactly the simultaneous-start case it exists for.
+  assert.equal(claimUsagePoll(cred, now - 1, 60, share), null);
+
+  // The claim EXPIRES. A window killed mid-request must not stop the account
+  // from ever polling again — the whole reason this is not a lock.
+  const successor = claimUsagePoll(cred, now + 61, 60, share);
+  assert.ok(successor);
+  assert.notEqual(successor, held);
+
+  // The overtaken window wakes up and releases: it must NOT remove the claim
+  // that superseded it, or a third window would join the one now polling.
+  releaseUsagePoll(cred, held, share);
+  assert.equal(claimUsagePoll(cred, now + 62, 60, share), null);
+
+  // Its own owner releases it, and the next interval is free again.
+  releaseUsagePoll(cred, successor, share);
+  assert.ok(claimUsagePoll(cred, now + 63, 60, share));
+
+  // A claim dated far in the future is a broken clock, not a live holder;
+  // honouring it would silence this account permanently.
+  fs.writeFileSync(`${share}.lock`, JSON.stringify({ untilSec: now + 400 * 86400 }), "utf-8");
+  assert.ok(claimUsagePoll(cred, now + 64, 60, share));
+
+  // Garbage in the claim file is not a reason to stop polling.
+  fs.writeFileSync(`${share}.lock`, "not json", "utf-8");
+  assert.ok(claimUsagePoll(cred, now + 65, 60, share));
+});
+
+test("buildView: a 429 backoff is named in the tooltip, not left as a silently ageing number", () => {
+  const totals = { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  const now = 1_000_000;
+  const q = {
+    state: "ok" as const,
+    fiveH: { pct: 12, resetAt: now + WINDOW_5H_SECONDS },
+    sevenD: null,
+    asOfSec: now - 600,
+    pausedUntilSec: now + 12 * 60,
+  };
+  assert.match(buildView(totals, W, q, now, "en").tooltip, /Polling paused by the server/);
+  assert.match(buildView(totals, W, q, now, "ru").tooltip, /Опрос на паузе по требованию сервера/);
+  assert.match(buildPanelHtml(totals, W, q, now, "ru"), /Опрос на паузе по требованию сервера/);
+  // An expired backoff says nothing — the note must not outlive the pause.
+  const over = { ...q, pausedUntilSec: now - 1 };
+  assert.doesNotMatch(buildView(totals, W, over, now, "en").tooltip, /paused by the server/);
+  assert.doesNotMatch(buildView(totals, W, q, now, "en").text, /paused/); // bar stays clean
+  // The routes back off independently: one can be paused while the other keeps
+  // the number live. Announcing a pause beside a figure that is visibly current
+  // would be a contradiction, not a warning.
+  const live = { ...q, asOfSec: now - 30 };
+  assert.doesNotMatch(buildView(totals, W, live, now, "en").tooltip, /paused by the server/);
+  assert.doesNotMatch(buildPanelHtml(totals, W, live, now, "en"), /paused by the server/);
 });
 
 test("buildView: stale reading is NOT painted in the bar — neutral offline marker instead", () => {

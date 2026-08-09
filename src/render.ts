@@ -44,6 +44,10 @@ export interface QuotaView {
   /** Unix seconds the scoped windows were read from the server. 0/undefined =
    *  unknown → treated as too old to show. */
   scopedAsOfSec?: number;
+  /** Unix seconds a 429 backoff ends, when one is in force. An ageing number
+   *  with no stated reason is unreportable — the reader cannot tell a paused
+   *  poll from a broken one, so we name it. */
+  pausedUntilSec?: number;
 }
 
 /** Context-window fill for the active (Lead) session. `usedTokens` = the real
@@ -351,6 +355,23 @@ function dot(level: PaceLevel): string {
  *  never trips it, but short enough that a stuck poll flips to honest-offline. */
 const QUOTA_FRESH_SECONDS = 6 * 60;
 
+/** "Polling is paused for another N (rate limit)" — or null when it is not.
+ *  Stated as a countdown rather than a wall-clock time: no timezone to get
+ *  wrong, and it matches how every other reset in this UI reads.
+ *
+ *  Only ever said about a reading that has actually gone stale. The two routes
+ *  back off independently, so one can be paused while the other keeps the
+ *  numbers current — and announcing a pause next to a figure that is visibly
+ *  updating is not a warning, it is a contradiction. The note answers "why has
+ *  this stopped moving?", so it appears exactly when something has. Pure. */
+function pausedLine(quota: QuotaView, nowSec: number, m: Messages): string | null {
+  const until = quota.pausedUntilSec;
+  if (!until || until <= nowSec) return null;
+  const live = quota.asOfSec != null && nowSec - quota.asOfSec < QUOTA_FRESH_SECONDS;
+  if (live) return null;
+  return m.quotaPaused(fmtRemaining(until - nowSec, m.units));
+}
+
 /** A per-model weekly reading older than this stops being presented as current:
  *  the row keeps its %, but states its age inline. Comfortably above the ~5-min
  *  write throttle of the cache we read, so a normally-refreshed value reads
@@ -504,8 +525,12 @@ export function buildView(
       // quota bullet, so the tooltip read "…resets in 3d0h Updated 5m ago."
       if (ageSec >= 60) t.push("", m.quotaAsOf(fmtRemaining(ageSec, m.units)));
     }
+    const paused = pausedLine(quota, nowSec, m);
+    if (paused) t.push("", `_${paused}_`);
   } else {
     t.push(m.quotaUnavail(m.quotaStateMsg[quota.state]));
+    const paused = pausedLine(quota, nowSec, m);
+    if (paused) t.push(`_${paused}_`);
     t.push(m.localAlwaysAccurate);
     if (scopedLines.length) {
       t.push("");
@@ -710,7 +735,11 @@ export function buildPanelHtml(
     windowRow(m.w5h, quota.fiveH, WINDOW_5H_SECONDS);
     windowRow(m.w7d, quota.sevenD, WINDOW_7D_SECONDS);
     scopedRows();
-    quotaSection = `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}${ctxRow}`;
+    const paused = pausedLine(quota, nowSec, m);
+    quotaSection =
+      `<h3>${esc(m.panelQuotaHeader)}</h3>${quotaBlock.join("")}` +
+      (paused ? `<p class="muted">${esc(paused)}</p>` : "") +
+      ctxRow;
   } else {
     const reason = quota.state === "ok" ? m.quotaStateMsg.error : m.quotaStateMsg[quota.state];
     let lastKnown = "";
@@ -724,9 +753,11 @@ export function buildPanelHtml(
     // Keep the heading in the offline branch too: without it the panel opened
     // with a bare "temporarily unavailable", giving no clue WHAT is unavailable.
     scopedRows(); // independent source — still valid while 5h/7d is down
+    const paused = pausedLine(quota, nowSec, m);
     quotaSection =
       `<h3>${esc(m.panelQuotaHeader)}</h3>` +
       `<p class="muted">${esc(reason)}</p>` +
+      (paused ? `<p class="muted">${esc(paused)}</p>` : "") +
       lastKnown +
       quotaBlock.join("") +
       `<p class="muted">${esc(m.panelLocalAccurate)}</p>` +

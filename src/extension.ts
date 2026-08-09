@@ -9,9 +9,15 @@ import {
   fetchQuota,
   fetchUsage,
   fetchModelWindow,
+  backoffUntil,
+  coversQuota,
+  parseRetryAfterSec,
+  resolveCredentialsPath,
   shouldPoll,
+  shouldPollFree,
   usageCoversQuota,
   FAIL_RETRY_SEC,
+  USAGE_BACKOFF_MAX_SEC,
   QuotaResult,
   UsageResult,
   ModelWindowResult,
@@ -31,6 +37,14 @@ import {
 import { Weights, ContextInfo, QuotaWindow, ScopedQuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
 import { readLocalQuota } from "./localQuota";
 import { readCachedUsage } from "./usage";
+import {
+  accountKey,
+  claimUsagePoll,
+  readSharedUsage,
+  releaseUsagePoll,
+  usableSharedAtSec,
+  writeSharedUsage,
+} from "./usageShare";
 import { isRealModelId, readOpenChats, readPlannedEffort, readPlannedModel, shortModelLabel } from "./model";
 import { resolveLang, messages, Lang, LangSetting } from "./i18n";
 import { ProviderMode, ProviderSelection, UsageProviderKind } from "./providerTypes";
@@ -74,8 +88,73 @@ const TRUSTED_COMMANDS = [
 // quota state across ticks
 let lastQuota: QuotaResult | null = null;
 let lastFetchSec = 0;
-let rateLimitedUntilSec = 0;
+// 429 backoff, ONE PER ROUTE. Sharing a single variable meant a 429 from the
+// free usage GET also silenced the paid header poll — two independent endpoints
+// gagged by one refusal, which is how a single bad reply took the whole feature
+// off the air for an hour. They fail and recover on their own now.
+let quotaBackoffUntilSec = 0;
+let usageBackoffUntilSec = 0;
 let inFlight = false;
+/** Set by the status-bar click, cleared once the tick it triggered has decided
+ *  whether to poll. This is what makes the refresh command actually refresh:
+ *  every automatic gate (throttle, activity window, 429 backoff) is overridden
+ *  for exactly one tick, bounded by FORCE_MIN_GAP_SEC inside the gate itself. */
+let forceRefresh = false;
+/** Hands the click's authority to the PAID route alone, one tick later.
+ *
+ *  A click normally reaches only the free route, because while that route is
+ *  delivering, the paid one is skipped as redundant. But if the click's free
+ *  request then FAILS, the click has produced nothing — and the ordinary
+ *  activity gate would reject the fallback, since a user who clicks a stale
+ *  number is by definition not typing. So the failure re-arms the override for
+ *  the fallback only. Deliberately not the free route: re-arming that one on its
+ *  own failure is a retry loop with no exit. */
+let forceQuotaOnce = false;
+/** Per-process offset (0–29s) added to the free route's cadence.
+ *
+ *  Several editor windows launched together tick in lockstep, so they can all
+ *  find the shared file stale in the same instant and all fetch — and then stay
+ *  aligned, repeating the burst every interval. A fixed per-process skew pulls
+ *  them apart after the first round. Derived from the pid rather than random so
+ *  a given process behaves identically every tick. */
+const POLL_JITTER_SEC = process.pid % 30;
+
+/** Which credentials file the remembered quota state belongs to. null until the
+ *  first tick — an unknown previous account must not look like a change. */
+let activeCredFile: string | null = null;
+
+/** globalState keys for the last-known readings, scoped to the account.
+ *
+ *  Unscoped keys were the hole a restart could walk through: change the
+ *  credentials setting while the editor is closed, and the next launch restored
+ *  the PREVIOUS account's percentages — with the runtime switch-detector unable
+ *  to help, since from its point of view nothing changed during the session. If
+ *  the new account then cannot fetch, those foreign numbers simply stay. */
+function quotaKey(credFile: string): string {
+  return `lastGoodQuota:${accountKey(credFile)}`;
+}
+
+function usageKey(credFile: string): string {
+  return `lastGoodUsage:${accountKey(credFile)}`;
+}
+
+/** Drop every remembered quota reading. Called on an account switch: these
+ *  values are answers about a specific subscription, and there is no such thing
+ *  as a stale-but-usable reading of the WRONG account. */
+function forgetQuotaState(credFile: string): void {
+  lastQuota = null;
+  lastUsage = null;
+  lastGoodQuota = null;
+  lastGoodUsage = null;
+  lastFetchSec = 0;
+  lastUsageFetchSec = 0;
+  quotaBackoffUntilSec = 0;
+  usageBackoffUntilSec = 0;
+  usageFailStreak = 0;
+  lastPollFailed = false;
+  void extCtx?.globalState.update(quotaKey(credFile), undefined);
+  void extCtx?.globalState.update(usageKey(credFile), undefined);
+}
 // True after a failed (timeout/network) poll → the next poll is allowed sooner
 // (FAIL_RETRY_SEC) so an intermittent link is caught quickly instead of waiting
 // the full interval. Reset to false on any successful poll.
@@ -106,6 +185,14 @@ let lastUsage: UsageResult | null = null;
  *  the payload is currently covering the header poll. */
 let lastUsageFetchSec = 0;
 let usageInFlight = false;
+/** Consecutive failures of the usage route. Drives the fast-retry allowance
+ *  below: without a bound, a machine with no network would retry every 45s
+ *  forever now that idleness no longer stops the poll. */
+let usageFailStreak = 0;
+/** How many quick retries a failure earns before the cadence settles back to
+ *  the normal interval. Enough to ride out a tunnel or a laptop waking up;
+ *  short enough that a genuinely offline machine stops burning wake-ups. */
+const USAGE_FAST_RETRIES = 3;
 /** Windows last seen from the LIVE payload, kept across ticks so a momentary
  *  failure doesn't blank the Fable row (the renderer states their age). */
 let lastGoodUsage: { scoped: ScopedQuotaWindow[]; atSec: number } | null = null;
@@ -611,6 +698,19 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
 }
 
 async function tick() {
+  // Consume the click's override HERE, before any early return: a flag left set
+  // by a tick that bailed out (no folder, Codex provider, quota disabled) would
+  // silently arm the next automatic tick with a second, unasked-for request.
+  const forced = forceRefresh;
+  forceRefresh = false;
+  // The click's authority, handed to the paid fallback by a failed forced free
+  // poll (see forceQuotaOnce). Consumed here for the same reason as above.
+  // Kept distinct from `forced`: only the FALLBACK may be re-armed, and only the
+  // fallback describes a click that has so far produced nothing.
+  const forcedFallback = forceQuotaOnce;
+  forceQuotaOnce = false;
+  const forcedPaid = forced || forcedFallback;
+
   const conf = cfg();
   if (!conf.enabled) {
     item.backgroundColor = undefined;
@@ -687,28 +787,94 @@ async function tick() {
   } else {
     // ── Source 0: the usage payload — the ONLY live source of the per-model
     // weekly windows (Fable), and a free superset of the header poll below.
-    // Same gate as that poll (throttle + activity + 429 backoff) and the same
-    // `lastFetchSec` reset on a manual click, so one click refreshes Fable too.
-    const usageThrottleSec = lastUsage?.state === "error" ? Math.min(conf.minPollSeconds, FAIL_RETRY_SEC) : conf.minPollSeconds;
-    if (
-      !usageInFlight &&
-      shouldPoll(lastUsageFetchSec, nowSec, usageThrottleSec, mtimeMs, rateLimitedUntilSec, conf.minPollSeconds)
-    ) {
+    //
+    // Polled on a FIXED CADENCE, active or idle. It is a plain GET costing zero
+    // tokens, so the activity gate that (rightly) guards the paid poll below
+    // bought nothing here and cost everything: the numbers stopped moving the
+    // moment the human stopped typing — exactly when a long autonomous run is
+    // spending the quota they want to watch.
+    //
+    // Another window may have just fetched the same number: the shared file is
+    // consulted first, so N open editors still produce ONE request per interval.
+    const credFile = resolveCredentialsPath(conf.credentialsPath);
+    // Switching credentials switches ACCOUNT. Everything remembered about the
+    // old one — in memory and in globalState — describes a different
+    // subscription, and keeping it would put the previous account's percentages
+    // on this account's bar until a fresh reading happened to beat them on
+    // timestamp. The on-disk share is already account-keyed; this is the same
+    // rule applied to our own state.
+    // Compared by ACCOUNT KEY, not by raw string: the key canonicalizes case,
+    // separators and symlinks, so merely respelling the same path in settings
+    // must not be mistaken for a new account and throw away good readings.
+    if (activeCredFile !== null && accountKey(activeCredFile) !== accountKey(credFile)) {
+      forgetQuotaState(activeCredFile);
+    }
+    activeCredFile = credFile;
+    const shared = readSharedUsage(credFile);
+    // Sources 2 and 3 below are the DEFAULT account's files by construction:
+    // Claude Code writes them for whoever it is signed in as, with no way to ask
+    // for another. When this window has been pointed at a different credentials
+    // file, they describe someone else's subscription — so they are not read at
+    // all rather than merged into this account's numbers.
+    const defaultAccount = !conf.credentialsPath.trim();
+    const usageThrottleSec =
+      usageFailStreak > 0 && usageFailStreak <= USAGE_FAST_RETRIES
+        ? Math.min(conf.minPollSeconds, FAIL_RETRY_SEC)
+        : conf.minPollSeconds + POLL_JITTER_SEC;
+    // Treat someone else's fetch as if it were ours for gating purposes. 0 when
+    // the shared file is absent, unusable, or dated in the future (see
+    // usableSharedAtSec — a bogus date must not be able to silence this window).
+    const sharedGateSec = usableSharedAtSec(shared, nowSec);
+    const usageGateSec = Math.max(lastUsageFetchSec, sharedGateSec);
+    // A click that lands while a request is already running must not evaporate:
+    // the flag was consumed at the top of this tick, so hand it to the next one
+    // instead. The in-flight request's own completion re-ticks, so the wait is
+    // bounded by that request, not by the refresh timer.
+    if (usageInFlight && forced) forceRefresh = true;
+    // Last gate, and the only one that can see the OTHER windows: taken just
+    // before the request, because the shared file is written only when one
+    // COMPLETES — the seconds in between are exactly when simultaneous starts
+    // happen, and on a common cadence they would keep happening. Evaluated last
+    // so a claim is never taken by a tick that then decides not to poll.
+    const claim =
+      !usageInFlight && shouldPollFree(usageGateSec, nowSec, usageThrottleSec, usageBackoffUntilSec, forced)
+        ? claimUsagePoll(credFile, nowSec)
+        : null;
+    if (claim) {
       usageInFlight = true;
       lastUsageFetchSec = nowSec;
       fetchUsage(conf.credentialsPath, nowSec)
         .then((r) => {
+          // The account may have been switched while this was in the air. Its
+          // answer describes the OLD subscription, so applying it would undo the
+          // wipe and put the previous account's percentages back on the bar.
+          if (credFile !== activeCredFile) return;
           lastUsage = r;
           lastUsageFetchSec = r.fetchedAtSec;
+          usageFailStreak = r.state === "ok" ? 0 : usageFailStreak + 1;
+          // A click that reached only this route and got nothing must not end in
+          // silence: hand its authority to the paid fallback for the next tick.
+          if (forced && r.state !== "ok") forceQuotaOnce = true;
           if (r.state === "rate-limited") {
-            const retry = Number(r.detail) || 60;
-            rateLimitedUntilSec = nowSec + Math.max(retry, conf.minPollSeconds);
+            // Capped, unlike the paid route below: see USAGE_BACKOFF_MAX_SEC.
+            usageBackoffUntilSec = backoffUntil(
+              nowSec,
+              parseRetryAfterSec(r.detail, nowSec),
+              conf.minPollSeconds,
+              USAGE_BACKOFF_MAX_SEC
+            );
+          } else if (r.state === "ok") {
+            usageBackoffUntilSec = 0; // the route answered → whatever it objected to is over
           }
           // Keep the last GOOD scoped reading: a momentary failure must not blank
           // a row whose number is still perfectly usable (its age is shown).
           if (r.state === "ok" && r.scoped.length) {
             lastGoodUsage = { scoped: r.scoped, atSec: r.fetchedAtSec };
-            void extCtx?.globalState.update("lastGoodUsage", lastGoodUsage);
+            void extCtx?.globalState.update(usageKey(credFile), lastGoodUsage);
+          }
+          // Publish for the other windows — only a real reading, never a failure.
+          if (r.state === "ok") {
+            writeSharedUsage(credFile, { fiveH: r.fiveH, sevenD: r.sevenD, scoped: r.scoped }, r.fetchedAtSec);
           }
           if (r.state !== "ok") {
             logDiagnostics("Claude usage", [`state: ${r.state}`, r.detail ? `detail: ${r.detail}` : ""]);
@@ -716,6 +882,8 @@ async function tick() {
         })
         .finally(() => {
           usageInFlight = false;
+          releaseUsagePoll(credFile, claim); // hand the interval back before its TTL
+          void tick(); // paint the new number now, not up to refreshSeconds later
         });
     }
 
@@ -731,21 +899,54 @@ async function tick() {
     const throttleSec = lastPollFailed
       ? Math.min(conf.minPollSeconds, FAIL_RETRY_SEC)
       : conf.minPollSeconds;
+    // "Delivering" counts a reading from ANY window of this account, not just
+    // one we fetched ourselves. A second editor window skips the free request
+    // because the shared file is fresh — so judging coverage by our own
+    // `lastUsage` alone would leave it permanently empty and send that window to
+    // the PAID route every interval. N windows, N-1 needless paid polls, to
+    // learn a number already sitting on disk.
+    //
+    // But a shared reading only counts while OUR OWN free route has not just
+    // failed. Otherwise the invariant this whole fallback exists for — "the free
+    // route dies, the paid one takes over" — would be defeated by our own last
+    // success: the file we wrote minutes ago would keep vouching for a route
+    // that is now down, for as long as it stayed young. `lastUsage` is null for
+    // a window that never had to fetch (the case above), and an error only for
+    // one that tried and failed.
+    const maxAgeSec = conf.minPollSeconds * 2;
+    const freeRouteFailing = lastUsage != null && lastUsage.state !== "ok";
+    const covered =
+      usageCoversQuota(lastUsage, nowSec, maxAgeSec) ||
+      (!freeRouteFailing && coversQuota(shared.fiveH, shared.sevenD, sharedGateSec, nowSec, maxAgeSec));
+    // Rescue only the FALLBACK authority, never the click itself: a click whose
+    // free poll is healthy has no business here, and re-arming it would buy a
+    // second paid request out of one press.
+    if (inFlight && forcedFallback) forceQuotaOnce = true;
     if (
       !inFlight &&
-      !usageCoversQuota(lastUsage, nowSec, conf.minPollSeconds * 2) &&
-      shouldPoll(lastFetchSec, nowSec, throttleSec, mtimeMs, rateLimitedUntilSec, conf.minPollSeconds)
+      // Coverage is NOT bypassed for a click. A click asks for fresh numbers,
+      // and while the free route is delivering them it already provides exactly
+      // that — spending a token to re-learn the same two figures would be the
+      // "free first, paid only on failure" rule broken by its own escape hatch.
+      // The failure path reaches this line anyway: a failed forced free poll
+      // marks the route as failing, which drops `covered` on the next tick.
+      !covered &&
+      shouldPoll(lastFetchSec, nowSec, throttleSec, mtimeMs, quotaBackoffUntilSec, conf.minPollSeconds, forcedPaid)
     ) {
       inFlight = true;
       fetchQuota(conf.credentialsPath, nowSec)
         .then((r) => {
+          if (credFile !== activeCredFile) return; // answer for a former account
           lastQuota = r;
           lastFetchSec = r.fetchedAtSec;
           // a network/timeout failure → retry soon; success/429 → normal cadence
           lastPollFailed = r.state === "error";
           if (r.state === "rate-limited") {
-            const retry = Number(r.detail) || 60;
-            rateLimitedUntilSec = nowSec + Math.max(retry, conf.minPollSeconds);
+            // This route SPENDS tokens, so its Retry-After is honoured verbatim —
+            // no cap (contrast the free GET above).
+            quotaBackoffUntilSec = backoffUntil(nowSec, parseRetryAfterSec(r.detail, nowSec), conf.minPollSeconds);
+          } else if (r.state === "ok") {
+            quotaBackoffUntilSec = 0;
           }
           // Surface quota fetch failures in the diagnostics log (previously only
           // Codex was logged) so a "limits stopped showing" report can be told
@@ -764,14 +965,16 @@ async function tick() {
     // This is the SAME real server data Claude Code shows in its own usage view,
     // mirrored to a file by the companion statusline.py — so it stays available
     // on links too weak for our own poll to complete.
-    const local = readLocalQuota();
+    const local = defaultAccount ? readLocalQuota() : { ok: false, fiveH: null, sevenD: null, writtenAtSec: 0 };
 
     // ── Source 3: Claude Code's own on-disk usage cache — zero network. Only a
     // FALLBACK now that we fetch the payload ourselves: it is refilled when the
     // CLI happens to fetch usage, so it can be hours old. It still earns its
     // place — it covers the first tick after a reload and any moment our request
     // cannot get through.
-    const cached = readCachedUsage();
+    const cached = defaultAccount
+      ? readCachedUsage()
+      : { ok: false, fiveH: null, sevenD: null, scoped: [], fetchedAtSec: 0 };
 
     // ── Merge: freshest valid reading wins, then persist as last-known. Strict
     // ">" so a tie never flip-flops; the network reading is preferred when it is
@@ -789,6 +992,17 @@ async function tick() {
     if (cached.ok && (cached.fiveH || cached.sevenD)) {
       candidates.push({ fiveH: cached.fiveH, sevenD: cached.sevenD, atSec: cached.fetchedAtSec, source: "local" });
     }
+    // The reading another editor window fetched — same server data, same clock,
+    // so it competes on freshness like any other candidate. This is the half of
+    // the cross-window share that pays it back: a window that skipped its own
+    // request still shows the number the request that DID run brought home.
+    // Future-dated readings are refused for a harsher reason than above: the
+    // merge keeps the newest timestamp FOREVER (and persists it), so one bogus
+    // date would pin the display to that reading permanently — nothing real
+    // could ever out-freshen it again.
+    if (sharedGateSec && (shared.fiveH || shared.sevenD)) {
+      candidates.push({ fiveH: shared.fiveH, sevenD: shared.sevenD, atSec: sharedGateSec, source: "usage" });
+    }
     let refreshed = false;
     for (const c of candidates) {
       if (!lastGoodQuota || c.atSec > lastGoodQuota.atSec) {
@@ -796,7 +1010,7 @@ async function tick() {
         refreshed = true;
       }
     }
-    if (refreshed) void extCtx?.globalState.update("lastGoodQuota", lastGoodQuota);
+    if (refreshed) void extCtx?.globalState.update(quotaKey(credFile), lastGoodQuota);
 
     if (lastGoodQuota) {
       // We have a real reading (possibly last-known) → always show it. Never
@@ -821,11 +1035,17 @@ async function tick() {
     const scopedCandidates: Array<{ scoped: ScopedQuotaWindow[]; atSec: number }> = [];
     if (lastGoodUsage) scopedCandidates.push(lastGoodUsage);
     if (cached.ok && cached.scoped.length) scopedCandidates.push({ scoped: cached.scoped, atSec: cached.fetchedAtSec });
+    if (sharedGateSec && shared.scoped.length) scopedCandidates.push({ scoped: shared.scoped, atSec: sharedGateSec });
     const bestScoped = scopedCandidates.sort((a, b) => b.atSec - a.atSec)[0];
     if (bestScoped) {
       quotaView.scoped = bestScoped.scoped;
       quotaView.scopedAsOfSec = bestScoped.atSec;
     }
+    // Say WHY the number stopped moving while a 429 backoff is in force. Without
+    // this the bar just quietly ages, and an unexplained stale reading is the
+    // one failure mode nobody can report usefully.
+    const pausedUntil = Math.max(usageBackoffUntilSec, quotaBackoffUntilSec);
+    if (pausedUntil > nowSec) quotaView.pausedUntilSec = pausedUntil;
   }
 
   const modelView = buildModelView(context, cwd, conf.modelEnabled);
@@ -958,10 +1178,29 @@ export function activate(context: vscode.ExtensionContext) {
   // instead of blanking until the first successful poll (the exact "stopped
   // showing after the update" symptom this guards against).
   try {
-    const g = context.globalState.get<GoodQuota>("lastGoodQuota");
-    if (g && typeof g.atSec === "number" && (g.fiveH || g.sevenD)) lastGoodQuota = g;
-    const u = context.globalState.get<{ scoped: ScopedQuotaWindow[]; atSec: number }>("lastGoodUsage");
-    if (u && typeof u.atSec === "number" && Array.isArray(u.scoped) && u.scoped.length) lastGoodUsage = u;
+    const conf = cfg();
+    const credFile = resolveCredentialsPath(conf.credentialsPath);
+    activeCredFile = credFile;
+    // Restore only what belongs to THIS account. The pre-1.0.23 unscoped keys
+    // are NOT read: they were written under whatever credentials were set at the
+    // time, so "the setting is empty now" does not prove they came from the
+    // default account — and nothing is lost by dropping them, because the free
+    // route now polls on the very first tick instead of waiting for activity.
+    //
+    // Age-bounded as well. Re-signing in as a different account reuses the same
+    // credentials file, so the key cannot tell the two apart; a short bound
+    // keeps that blind spot to minutes. It costs nothing — this value exists
+    // only to avoid a blank line across a reload, and anything older than this
+    // is replaced by the first poll anyway.
+    const HYDRATE_MAX_AGE_SEC = 30 * 60;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const fresh = (atSec: unknown): boolean =>
+      typeof atSec === "number" && atSec > 0 && nowSec - atSec < HYDRATE_MAX_AGE_SEC;
+    const g = context.globalState.get<GoodQuota>(quotaKey(credFile));
+    if (g && fresh(g.atSec) && (g.fiveH || g.sevenD)) lastGoodQuota = g;
+    type GoodUsage = { scoped: ScopedQuotaWindow[]; atSec: number };
+    const u = context.globalState.get<GoodUsage>(usageKey(credFile));
+    if (u && fresh(u.atSec) && Array.isArray(u.scoped) && u.scoped.length) lastGoodUsage = u;
   } catch {
     /* fine — falls back to fetching fresh */
   }
@@ -969,12 +1208,23 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("ccStatusbar.refresh", () => {
-      lastFetchSec = 0; // force a quota refresh on manual click
-      // ...including the per-model weekly windows: clearing the payload's gate
-      // is what makes a click actually re-ask for the Fable number instead of
-      // re-showing the last one.
-      lastUsageFetchSec = 0;
-      rateLimitedUntilSec = 0;
+      // Zeroing the throttles is not enough on its own — the ACTIVITY window is
+      // what used to swallow the click, so a user who had been away for five
+      // minutes (i.e. anyone who clicks because the number looks stale) got no
+      // request at all, just a repaint of the same figures. The explicit flag
+      // overrides every gate for one tick instead.
+      forceRefresh = true;
+      // NOTE: the attempt timestamps are deliberately NOT zeroed. Zeroing them
+      // was the old way to force a refetch, and keeping it would quietly disable
+      // the new anti-spam floor — that floor measures "how long since the last
+      // attempt", so an attempt time of 0 always reads as "long enough" and a
+      // held-down click becomes one request per click.
+      //
+      // The 429 backoffs are not cleared either. The forced
+      // poll goes through regardless (see shouldPoll/shouldPollFree), and if it
+      // succeeds the handler clears them itself — but if the server is still
+      // refusing, the automatic cadence must keep honouring what it said rather
+      // than resume at full rate because someone clicked.
       lastCodexFetchSec = 0;
       lastCodexThreadRefreshSec = 0;
       void tick();

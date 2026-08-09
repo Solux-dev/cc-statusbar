@@ -262,11 +262,17 @@ _По умолчанию язык берётся из языка редакто�
      `GET /api/oauth/usage`, the route Claude Code itself calls for its `/usage`
      view, using your existing local OAuth token. A plain read: no message is
      generated, so it costs **nothing**, and it is the **only** channel that
-     carries the per-model weekly windows (Fable). Same throttle as the poll
-     below — at most once per `quota.minPollSeconds` (default 300s), only while
-     the session is active, plus a manual refresh when you click the item.
-     Undocumented route → isolated in `src/quota.ts` + `src/usage.ts`; on any
-     failure the sources below take over unchanged.
+     carries the per-model weekly windows (Fable). Polled on a **fixed cadence —
+     once per `quota.minPollSeconds` (default 300s), whether or not you are
+     typing**: it costs nothing, and the numbers you most need to watch are the
+     ones a long autonomous run is spending while you are away from the keyboard.
+     Open editor windows **share one poll** through
+     `~/.claude/.cc-statusbar-usage-<account>.json` (plus a short-lived claim
+     file beside it), so N windows make **one** request per interval, not N. The
+     name carries a fingerprint of your `credentialsPath`, so two windows on
+     different accounts never read each other's numbers. Undocumented route →
+     isolated in `src/quota.ts` + `src/usage.ts`; on any failure the sources
+     below take over unchanged.
   2. **Passive local bridge — zero network, zero token cost.** The companion
      `statusline.py` mirrors the `rate_limits` that Claude Code already hands to
      its **statusLine hook** into `~/.claude/.cc-statusbar-quota.json`; the
@@ -282,7 +288,10 @@ _По умолчанию язык берётся из языка редакто�
      `anthropic-ratelimit-unified-*` response headers carry 5h/7d. Costs **~1
      token per poll**, so it is **skipped entirely while source 1 is delivering
      those two windows** — and resumes by itself the moment that route fails or
-     stops carrying them.
+     stops carrying them. Because it spends tokens it keeps the **activity
+     gate** (only polls while the session has been active in the last
+     `quota.minPollSeconds`) and honours a `Retry-After` verbatim. Clicking the
+     item overrides both.
   4. **Claude Code's own on-disk copy — zero network.** The CLI persists the
      same usage payload in `~/.claude.json` (`cachedUsageUtilization`). Read as
      a last resort: it covers the first tick after a reload and any moment our
