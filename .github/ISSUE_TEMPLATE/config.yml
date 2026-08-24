@@ -1,8 +1,9 @@
+# No security entry here on purpose: GitHub adds one automatically from
+# SECURITY.md, and it lands on the policy first. That order is the useful one —
+# the policy's "what is NOT a vulnerability" section saves both sides a report.
+# A second link straight to the advisory form only read as a duplicate.
 blank_issues_enabled: true
 contact_links:
-  - name: Report a security vulnerability (private)
-    url: https://github.com/Solux-dev/cc-statusbar/security/advisories/new
-    about: Anything that could move credentials, prompts or transcripts off a user's machine. Only the maintainer sees it.
   - name: How the numbers are produced
     url: https://github.com/Solux-dev/cc-statusbar#how-it-gets-data
     about: Where each figure comes from, and what can temporarily break it — worth a look before reporting a blank reading.
