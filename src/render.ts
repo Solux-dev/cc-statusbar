@@ -622,7 +622,10 @@ export function buildView(
   t.push("");
   t.push(RULE);
   t.push("");
-  t.push(`[${m.openPanel}](command:ccStatusbar.openPanel) · [${m.switchLang}](command:ccStatusbar.switchLanguage)`);
+  t.push(
+    `[${m.openPanel}](command:ccStatusbar.openPanel) · [${m.switchLang}](command:ccStatusbar.switchLanguage)` +
+      ` · [${m.reportIssue}](${ISSUES_URL})`
+  );
 
   return { text, tooltip: t.join("\n"), level };
 }
@@ -692,13 +695,17 @@ export function buildCodexQuotaView(
   t.push("");
   t.push(m.legend);
   t.push("");
-  t.push(`[${m.openPanel}](command:ccStatusbar.openPanel)`);
+  t.push(`[${m.openPanel}](command:ccStatusbar.openPanel) · [${m.reportIssue}](${ISSUES_URL})`);
   return { text, tooltip: t.join("\n"), level: segs.length ? level : "tight" };
 }
 
 function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+/** Issue tracker — the extension's only route back to the project. Kept in sync
+ *  with `bugs.url` in package.json by a test, so the two cannot drift. */
+export const ISSUES_URL = "https://github.com/Solux-dev/cc-statusbar/issues";
 
 /** A label (or a whole sentence) plus its ⓘ footnote. The visible text must read
  *  on its own — the footnote adds the full story, never carries it. Shared by
@@ -729,6 +736,23 @@ const HINT_CSS = `
     box-shadow:0 2px 8px rgba(0,0,0,.35); transition:opacity .1s ease; pointer-events:none;
   }
   .hint:hover .tip, .hint:focus .tip { visibility:visible; opacity:1; }`;
+
+/** Footer link back to the project, identical in both panels. No opacity on the
+ *  anchor: dimming a coloured link is what pushes 12px text under the readable
+ *  contrast ratio, and this link is the one thing on the page a user must be
+ *  able to find. The fallback is the theme's own text colour rather than a
+ *  hard-coded blue — a blue that reads on dark is unreadable on light. */
+const FOOT_CSS = `
+  .foot { margin-top:16px; font-size:12px; }
+  .foot a { color: var(--vscode-textLink-foreground, var(--vscode-foreground)); text-decoration:none; }
+  .foot a:hover, .foot a:focus { text-decoration:underline; }`;
+
+/** The one place the extension points back at the project. Rendered in both
+ *  panels; the marketplace page is not the route, because most people install
+ *  from inside the editor and never see it. */
+function footHtml(m: Messages): string {
+  return `<div class="foot"><a href="${ISSUES_URL}">${esc(m.reportIssue)}</a></div>`;
+}
 
 /** Full HTML document for the persistent webview panel — same numbers as the
  *  tooltip, themed with VS Code variables. Pure: no VS Code imports, no scripts
@@ -999,7 +1023,7 @@ export function buildPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.65; font-size:12px; }${HINT_CSS}
+  .muted { opacity:.65; font-size:12px; }${HINT_CSS}${FOOT_CSS}
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>
@@ -1012,6 +1036,7 @@ export function buildPanelHtml(
   ${costSection}
   ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
+  ${footHtml(m)}
 </body>
 </html>`;
 }
@@ -1127,7 +1152,7 @@ export function buildCodexPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.55; }${HINT_CSS}
+  .muted { opacity:.55; }${HINT_CSS}${FOOT_CSS}
 </style>
 </head>
 <body>
@@ -1138,6 +1163,7 @@ export function buildCodexPanelHtml(
   ${cacheSection}
   ${costSection}
   ${detailsSection}
+  ${footHtml(m)}
 </body>
 </html>`;
 }

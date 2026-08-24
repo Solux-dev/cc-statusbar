@@ -158,6 +158,11 @@ export interface Messages {
   legend: string;
   switchLang: string; // tooltip link label → ccStatusbar.switchLanguage
   openPanel: string; // tooltip link label → ccStatusbar.openPanel
+  /** Link label to the issue tracker. The only route from the extension to the
+   *  project: 90% of installs happen inside the editor and never open the
+   *  marketplace page, so a reader who hits a wrong number has nowhere to say
+   *  so unless the extension itself offers the way. */
+  reportIssue: string;
   panelTitle: string; // webview panel tab title
   // webview panel (plain text — HTML provides the styling)
   tok: string;
@@ -313,6 +318,7 @@ const EN: Messages = {
   legend: "_Dot color: 🟢 on track · 🟡 running tight · 🔴 over pace. Click the item to refresh._",
   switchLang: "🌐 Change language",
   openPanel: "⤢ Open panel",
+  reportIssue: "Report an issue",
   panelTitle: "Claude Code — Session Usage",
   tok: "tok",
   panelCostLabel: "Token-equivalent with cache",
@@ -326,10 +332,12 @@ const EN: Messages = {
   panelLocalAccurate:
     "Raw token counters come from the local transcript. Token-equivalent uses this extension's cache weights.",
   panelLegend: "🟢 on track · 🟡 running tight · 🔴 over pace · updates live",
+  // Same rename as the panel: "tier" is jargon, and it survived here when the
+  // panel row was reworded. One vocabulary across every surface.
   cacheTierLine: (tier) =>
     tier === "1h"
-      ? "🗄 Cache: 1-hour tier — survives ~1h idle"
-      : "🗄 Cache: 5-minute tier — pauses over 5 min rebuild it",
+      ? "🗄 Cache stays warm — 1 hour idle"
+      : "🗄 Cache stays warm — 5 minutes idle; longer pauses rebuild it",
   panelCacheHeader: "Cache",
   // "Tier" was jargon. The label + value now read as one sentence — the hover
   // footnote below is unchanged and still carries the full explanation.
@@ -490,6 +498,7 @@ const RU: Messages = {
   legend: "_Цвет точки: 🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы. Клик по строке — обновить._",
   switchLang: "🌐 Сменить язык",
   openPanel: "⤢ Открыть панель",
+  reportIssue: "Сообщить о проблеме",
   panelTitle: "Claude Code — расход сессии",
   tok: "ток",
   panelCostLabel: "Токен-эквивалент с кэшем",
@@ -503,10 +512,12 @@ const RU: Messages = {
   panelLocalAccurate:
     "Сырые счётчики токенов взяты из локального транскрипта. Токен-эквивалент использует веса кэша расширения.",
   panelLegend: "🟢 в норме · 🟡 близко к лимиту · 🔴 выше нормы · обновляется в реальном времени",
+  // Та же правка, что в панели: «тир» — жаргон, и здесь он уцелел, когда строку
+  // панели переписали. Один словарь на всех поверхностях.
   cacheTierLine: (tier) =>
     tier === "1h"
-      ? "🗄 Кэш: часовой тир — живёт ~1ч простоя"
-      : "🗄 Кэш: 5-мин тир — паузы дольше 5 мин перестраивают его",
+      ? "🗄 Кэш держится — 1 час простоя"
+      : "🗄 Кэш держится — 5 минут простоя; паузы дольше перестраивают его",
   panelCacheHeader: "Кэш",
   // «Тир» — жаргон. Метка и значение теперь читаются одной фразой; сноска ⓘ
   // ниже не изменилась и по-прежнему объясняет всё полностью.

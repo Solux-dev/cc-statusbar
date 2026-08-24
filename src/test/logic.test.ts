@@ -22,7 +22,7 @@ import {
   knownModelWindow,
   WINDOW_5H_SECONDS,
 } from "../metrics";
-import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown, rebuildDisplay } from "../render";
+import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown, rebuildDisplay, ISSUES_URL } from "../render";
 import { parseLocalQuota, windowFromBridge } from "../localQuota";
 import {
   parseCachedUsage,
@@ -1468,14 +1468,19 @@ test("buildView: context ≥60% → 🔴 dot, still does not tint the bar", () =
   assert.equal(v.level, "normal");
 });
 
-test("buildView: cache tier line in tooltip (concise); absent when tier null", () => {
+test("buildView: the hover speaks the same words as the panel — no 'tier'", () => {
+  // The panel row was reworded in 1.0.24 and this line was missed, so the same
+  // fact was called "Cache stays warm" in one place and "1-hour tier" in the
+  // other. One vocabulary, or the reader thinks they are two different things.
   const base = { state: "disabled" as const, fiveH: null, sevenD: null };
   const v1h = buildView(ctxTotals, W, base, 1000, "en", undefined, { tier: "1h", hitRatePct: 82 });
-  assert.match(v1h.tooltip, /Cache: 1-hour tier/);
+  assert.match(v1h.tooltip, /Cache stays warm — 1 hour idle/);
+  assert.ok(!/tier/i.test(v1h.tooltip), "the jargon is gone from the hover too");
   const v5m = buildView(ctxTotals, W, base, 1000, "ru", undefined, { tier: "5m", hitRatePct: 40 });
-  assert.match(v5m.tooltip, /5-мин тир/);
+  assert.match(v5m.tooltip, /Кэш держится — 5 минут простоя/);
+  assert.ok(!/тир/i.test(v5m.tooltip), "и в русском тоже");
   const none = buildView(ctxTotals, W, base, 1000, "en", undefined, { tier: null, hitRatePct: null });
-  assert.ok(!/Cache:/.test(none.tooltip), "no tier → no cache line");
+  assert.ok(!/Cache stays warm/.test(none.tooltip), "no tier → no cache line");
 });
 
 test("buildPanelHtml: cache section — tier + hit rate + hover footnotes; hidden when empty", () => {
@@ -2823,4 +2828,43 @@ test("panel footnotes stay inside a narrow docked panel, same size in a wide one
     assert.match(html, /max-width:322px; max-width:min\(322px, calc\(100vw - 36px\)\)/,
       "the plain cap stays as a fallback for a renderer without CSS min()");
   }
+});
+
+// ---------------------------------------------------------------------------
+// The way back to the project. 895 installs against 133 marketplace-page views
+// means people install from inside the editor and never see that page — so the
+// only route from a wrong number to a bug report is a link the extension itself
+// shows. It must be in every surface, in both languages, for both providers.
+// ---------------------------------------------------------------------------
+
+test("the issue link is offered in every hover and both panels, both languages", () => {
+  const now = 1000;
+  const totals = { input: 0, output: 0, work: 1000, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0 };
+  const q = { state: "disabled" as const, fiveH: null, sevenD: null };
+  const labels = { en: "Report an issue", ru: "Сообщить о проблеме" };
+  for (const lang of ["en", "ru"] as const) {
+    const label = labels[lang];
+    // The WHOLE link, not the label and the URL separately: an edit that drops
+    // the href, a bracket or the <a> leaves both fragments in place while the
+    // text stops being clickable — the one failure this test exists to catch.
+    const asMarkdown = `[${label}](${ISSUES_URL})`;
+    const asHtml = `<a href="${ISSUES_URL}">${label}</a>`;
+    const surfaces: Array<[string, string, string]> = [
+      ["Claude hover", buildView(totals, W, q, now, lang).tooltip, asMarkdown],
+      ["Codex hover", buildCodexQuotaView(q, now, lang, { source: "stdio" }).tooltip, asMarkdown],
+      ["Claude panel", buildPanelHtml(totals, W, q, now, lang), asHtml],
+      ["Codex panel", buildCodexPanelHtml(q, now, lang, { source: "stdio" }), asHtml],
+    ];
+    for (const [name, surface, link] of surfaces) {
+      assert.ok(surface.includes(link), `${lang} · ${name}: no clickable link — expected ${link}`);
+    }
+  }
+});
+
+test("the issue link cannot drift from package.json's bugs.url", () => {
+  // Two hard-coded copies of the same URL is exactly how a dead link is born:
+  // one gets updated, the other does not.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const pkg = require("../../package.json") as { bugs?: { url?: string } };
+  assert.equal(ISSUES_URL, pkg.bugs?.url);
 });

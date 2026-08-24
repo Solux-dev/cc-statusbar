@@ -25,7 +25,11 @@
     "tokens",
     "usage",
     "cache",
-    "statusbar"
+    "statusbar",
+    "subagents",
+    "cursor",
+    "windsurf",
+    "vscodium"
   ],
   "repository": {
     "type": "git",

@@ -3,6 +3,31 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- **A way back to the project.** Both hovers and both panels now end with
+  **“Report an issue”** (RU: «Сообщить о проблеме»), linking to the GitHub issue
+  tracker. Until now the extension pointed nowhere: almost everyone installs it
+  from inside the editor and never opens the marketplace page, so a wrong number
+  had no route to a bug report. A test keeps the link in step with `bugs.url` in
+  `package.json`, so the two cannot drift apart.
+
+### Fixed
+
+- **The hover still said “tier”.** 1.0.24 dropped that word from the panel but
+  missed the same line in the hover, so one fact had two names: “Cache stays
+  warm — 1 hour idle” in the panel, “1-hour tier” in the hover. Both now read
+  the same (RU: «Кэш держится — 1 час простоя»), and a test fails if the word
+  comes back on either surface.
+
+### Changed
+
+- Marketplace keywords now include `subagents`, `cursor`, `windsurf` and
+  `vscodium` — the extension already works in those editors and in any VS Code
+  fork with Claude Code or Codex installed.
+
 ## [1.0.25] — 2026-08-24
 
 ### Changed
