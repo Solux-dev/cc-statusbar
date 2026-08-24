@@ -14,3 +14,9 @@ media/make_icon.py
 media/icon-256.png
 media/screenshot-*.png
 docs/**
+# Private working notes. They are already gitignored, but vsce packages from
+# DISK, not from git — without this line they ship inside the .vsix to every
+# user of the extension.
+Plan_github/**
+.github/**
+.mailmap
