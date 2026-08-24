@@ -1,0 +1,43 @@
+name: An idea
+description: Something you wish the extension showed, or showed differently
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome, including ones that get declined — a clear "no, and
+        here is why" is worth more to everyone than silence.
+
+        A few things are settled on purpose and are unlikely to change: no
+        score or efficiency verdict, no telemetry, no history of past sessions,
+        and no analytical numbers in the collapsed status-bar item. Arguing
+        against one of those is fair — just say why, so the answer can engage
+        with your reason instead of repeating the rule.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out?
+      description: >
+        The question you have while working, not the feature you imagine. "Am I
+        going to run out before this task finishes?" tells more than "add a
+        progress bar" — the same question often has a cheaper answer than the
+        feature suggests.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: A sketch, a wording, a rough drawing — anything concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: >
+        Whatever you fall back on now — another tool, a terminal command, or
+        guessing. This is the strongest evidence that the need is real.

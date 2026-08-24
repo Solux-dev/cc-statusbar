@@ -1,0 +1,88 @@
+name: A number looks wrong
+description: The quota, context, cache or token figure disagrees with reality
+labels: ["wrong-number"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the report that matters most. The whole point of this extension
+        is that its numbers can be trusted, so a figure that disagrees with
+        reality is the highest-priority kind of bug here.
+
+        **Security problems go elsewhere:** please use
+        [private reporting](https://github.com/Solux-dev/cc-statusbar/security/advisories/new)
+        instead of this form.
+
+  - type: dropdown
+    id: which
+    attributes:
+      label: Which number?
+      options:
+        - Quota — the 5h window
+        - Quota — the 7d window
+        - Quota — a per-model weekly window (e.g. Fable)
+        - Context window %
+        - Token-equivalent / without cache / cache saved
+        - Cache — "Cache stays warm" or "Input from cache"
+        - Delegated work (subagents)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: shown
+    attributes:
+      label: What it showed
+      description: Copy the line, or attach a screenshot of the panel or the hover.
+      placeholder: "7d 95% · resets in 20h41m"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What it should have shown, and how you know
+      description: >
+        The second half matters. "Claude Code's own /usage said 40%", "I had just
+        reset", "the transcript has no subagents in it" — anything that lets the
+        two figures be compared.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider shown at the time
+      options:
+        - Claude Code
+        - Codex
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: Extensions view → Claude/Codex Usage. Please check it is the latest.
+      placeholder: "1.0.25"
+    validations:
+      required: true
+
+  - type: input
+    id: editor
+    attributes:
+      label: Editor and OS
+      description: The same code runs in VS Code and its forks, and they do not always behave alike.
+      placeholder: "VS Code 1.104 on Windows 11 / Cursor on macOS 15"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Was the session long? Were subagents running? Had you just switched
+        model, or come back after a long pause? Please do not paste transcript
+        contents — they contain your prompts and code.

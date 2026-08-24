@@ -1,0 +1,80 @@
+name: Something is broken
+description: A blank reading, an error, bad layout, or anything that misbehaves
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a figure that is present but *wrong*, please use the
+        **A number looks wrong** form instead — it asks the right questions.
+
+        **Security problems go elsewhere:** please use
+        [private reporting](https://github.com/Solux-dev/cc-statusbar/security/advisories/new)
+        instead of this form.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Screenshots of the status bar, the hover or the panel help a lot.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: >
+        Even "it appears after the editor has been open for a few hours" is
+        useful. If you cannot reproduce it on demand, say so — an
+        intermittent report is still worth having.
+      placeholder: |
+        1. Open a workspace with an active Claude Code session
+        2. Hover the status-bar item
+        3. …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      placeholder: "1.0.25"
+    validations:
+      required: true
+
+  - type: input
+    id: editor
+    attributes:
+      label: Editor and OS
+      placeholder: "VS Code 1.104 on Windows 11 / VSCodium on Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Interface language
+      options:
+        - English
+        - Russian
+        - Auto (follows the editor)
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything in the log?
+      description: >
+        Help → Toggle Developer Tools → Console, or the Output panel. Paste only
+        lines mentioning this extension, and **remove any token or path you would
+        not publish**.
+      render: text

@@ -520,6 +520,23 @@ change on Anthropic's side, and are resolved by an update.
   line may briefly read `(limit n/a)`. It resolves itself on the next successful
   lookup — no action needed.
 
+## Found a wrong number? Say so
+
+A figure that disagrees with reality is the most valuable bug report this
+project can get — the whole point of the extension is that its numbers can be
+trusted. There is a **“Report an issue”** link at the foot of the panel and in
+the hover, or start here:
+
+- [**Report a wrong number**](https://github.com/Solux-dev/cc-statusbar/issues/new?template=wrong-number.yml)
+  · [something broken](https://github.com/Solux-dev/cc-statusbar/issues/new?template=bug.yml)
+  · [an idea](https://github.com/Solux-dev/cc-statusbar/issues/new?template=idea.yml)
+- [**CONTRIBUTING.md**](CONTRIBUTING.md) — how the code is arranged, and what a
+  pull request needs
+- [**SECURITY.md**](SECURITY.md) — anything that could move credentials,
+  prompts or transcripts off your machine goes
+  [**privately**](https://github.com/Solux-dev/cc-statusbar/security/advisories/new),
+  not into a public issue
+
 ## License
 
 MIT.

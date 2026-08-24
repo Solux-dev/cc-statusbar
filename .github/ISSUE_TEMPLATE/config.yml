@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Solux-dev/cc-statusbar/security/advisories/new
+    about: Anything that could move credentials, prompts or transcripts off a user's machine. Only the maintainer sees it.
+  - name: How the numbers are produced
+    url: https://github.com/Solux-dev/cc-statusbar#how-it-gets-data
+    about: Where each figure comes from, and what can temporarily break it — worth a look before reporting a blank reading.
