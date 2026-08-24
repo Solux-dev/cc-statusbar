@@ -581,8 +581,10 @@ test("buildCodexPanelHtml: Codex panel is sectioned and user-readable", () => {
   assert.match(html, />Кэш</);
   assert.match(html, />Детали</);
   assert.match(html, /Токен-эквивалент с кэшем/);
-  assert.match(html, /Без кэша было бы/);
-  assert.match(html, /Сэкономлено кэшем/);
+  // While Codex has not answered yet there is nothing to compare against, so the
+  // line stands alone with a dash. Blank "without cache" / "saved" rows read as
+  // zeros — worse than not showing them.
+  assert.ok(!/Без кэша было бы|Сэкономлено кэшем/.test(html), "no blank extras while waiting");
   assert.match(html, /Токен-эквивалент появится после следующего ответа Codex/);
   assert.match(html, /не денежная цена/);
   assert.match(html, /контекст: появится после следующего ответа Codex/);
@@ -2152,7 +2154,8 @@ test("buildPanelHtml: sections carry a short left-aligned separator", () => {
     effort: "high",
   });
   assert.match(html, /h3::before \{ content:""; position:absolute; top:0; left:0; width:44%/);
-  // the identity block is closed by the same short rule
+  // The token-equivalent line at the foot of the page has no <h3> of its own —
+  // it is set off by the same short rule instead.
   assert.match(html, /<div class="sep"><\/div>/);
 });
 
@@ -2689,4 +2692,135 @@ test("addRebuild: the tier buckets always add up to the total", () => {
   assert.equal(s.tokens1h + s.tokens5m + s.tokensUnknown, s.tokens);
   assert.equal(s.cacheWrite, 1300);
   assert.equal(s.streams, 2);
+});
+
+// ---------------------------------------------------------------------------
+// Release B — panel re-order. Both panels, both languages, must answer in this
+// order: how much is left → where it went → how well it is spent → the raw
+// number. The matrix is parameterised so a regression cannot hide in the
+// language or the provider that happens not to be spot-checked.
+// ---------------------------------------------------------------------------
+
+const ORDER_TOTALS = {
+  input: 50_000, output: 150_000, work: 200_000,
+  cacheRead: 10_000_000, cacheWrite: 1_000_000,
+  cacheWrite1h: 0, cacheWrite5m: 1_000_000, cacheWriteUnknown: 0,
+};
+const ORDER_SUBS = [
+  { agentType: "Explore", description: "map the repo", modelId: "claude-sonnet-5", modelLabel: "Sonnet 5", effort: "high", effective: 300_000 },
+];
+const ORDER_CTX = { usedTokens: 468_000, limitTokens: 1_000_000, limitState: "ok" as const };
+const ORDER_CODEX_USAGE = {
+  totalTokens: 105_000, lastTokens: 0,
+  inputTokens: 100_000, cachedInputTokens: 80_000,
+  outputTokens: 5_000, reasoningOutputTokens: 0,
+};
+
+/** Position of `needle`, asserting it is present at all. */
+function posIn(html: string, needle: string, where: string): number {
+  const i = html.indexOf(needle);
+  assert.ok(i >= 0, `${where}: missing from the panel — ${needle}`);
+  return i;
+}
+
+/** The page with every ⓘ footnote removed: what the reader sees without hovering.
+ *  Sound because `esc()` never emits a raw `<` inside a footnote. */
+function withoutFootnotes(html: string): string {
+  return html.replace(/<span class="tip">[^<]*<\/span>/g, "");
+}
+
+const CLAUDE_ORDER = [
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 47%", delegated: "Delegated work", cache: "<h3>Cache</h3>", cost: "Token-equivalent with cache", details: "<h3>Details</h3>", moved: ["Without cache", "Cache saved"], note: "not a money price", mult: "~4.6× lower" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 47%", delegated: "Делегировано саб-агентам", cache: "<h3>Кэш</h3>", cost: "Токен-эквивалент с кэшем", details: "<h3>Детали</h3>", moved: ["Без кэша было бы", "Сэкономлено кэшем"], note: "не денежная цена", mult: "в ~4.6× меньше" },
+];
+
+for (const c of CLAUDE_ORDER) {
+  test(`buildPanelHtml (${c.lang}): the page reads left → where → how well → raw number`, () => {
+    const now = 1000;
+    const q = {
+      state: "ok" as const,
+      fiveH: { pct: 24, resetAt: now + WINDOW_5H_SECONDS * 0.5 },
+      sevenD: { pct: 41, resetAt: now + 7 * 86400 * 0.4 },
+    };
+    const html = buildPanelHtml(
+      ORDER_TOTALS, W, q, now, c.lang, ORDER_CTX, { tier: "5m", hitRatePct: 82 },
+      undefined, ORDER_SUBS, 2_000_000
+    );
+    const at = (n: string): number => posIn(html, n, c.lang);
+    assert.ok(at(c.quota) < at(c.context), "the context line travels with the quota");
+    assert.ok(at(c.context) < at(c.delegated), "quota + context open the page");
+    assert.ok(at(c.delegated) < at(c.cache), "where it went, then how well it is spent");
+    assert.ok(at(c.cache) < at(c.cost), "the raw number comes last");
+    assert.ok(at(c.cost) < at(c.details), "…just above Details");
+  });
+
+  test(`buildPanelHtml (${c.lang}): the cost block is one line, its extras inside the ⓘ`, () => {
+    const now = 1000;
+    const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + 100 }, sevenD: { pct: 41, resetAt: now + 100 } };
+    const html = buildPanelHtml(ORDER_TOTALS, W, q, now, c.lang);
+    const visible = withoutFootnotes(html);
+    assert.ok(visible.includes(c.cost), "the headline label stays visible");
+    for (const moved of c.moved) {
+      assert.ok(!visible.includes(moved), `moved into the footnote: ${moved}`);
+    }
+    assert.ok(!visible.includes(c.note), "the disclaimer moved too");
+    // nothing was deleted: one footnote carries all three, numbers intact
+    const tip = new RegExp(`${c.moved[0]}[^<]*`).exec(html)?.[0] ?? "";
+    assert.ok(tip.includes("11.2M"), "without-cache figure");
+    assert.ok(tip.includes(c.mult), "savings multiplier");
+    assert.ok(tip.includes(c.note), "disclaimer");
+    assert.ok(tip.includes(c.moved[1]), "both extras sit in the SAME footnote");
+    // and the visible line still carries the headline number
+    assert.match(visible, /2\.5M/);
+  });
+}
+
+const CODEX_ORDER = [
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", moved: ["Without cache", "Cache saved"], value: "≈ 33k tok" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", moved: ["Без кэша было бы", "Сэкономлено кэшем"], value: "≈ 33k ток" },
+];
+
+for (const c of CODEX_ORDER) {
+  test(`buildCodexPanelHtml (${c.lang}): the Codex page follows the same order as the Claude one`, () => {
+    const now = 1000;
+    const html = buildCodexPanelHtml(
+      { state: "ok", fiveH: { pct: 10, resetAt: now + WINDOW_5H_SECONDS }, sevenD: null },
+      now,
+      c.lang,
+      { source: "stdio", context: { usedTokens: 14_000, limitTokens: 100_000, limitState: "ok" }, usage: ORDER_CODEX_USAGE }
+    );
+    const at = (n: string): number => posIn(html, n, c.lang);
+    assert.ok(at(c.quota) < at(c.context), "quota, then context");
+    assert.ok(at(c.context) < at(c.cache), "context above the cache section");
+    assert.ok(at(c.cache) < at(c.cost), "the raw number comes last");
+    assert.ok(at(c.cost) < at(c.details), "…just above Details");
+    // the extras live in the ⓘ, exactly as in the Claude panel
+    const visible = withoutFootnotes(html);
+    for (const moved of c.moved) {
+      assert.ok(!visible.includes(moved), `moved into the footnote: ${moved}`);
+    }
+    assert.match(html, new RegExp(`${c.moved[0]}[^<]*${c.moved[1]}`), "both extras sit in one footnote");
+    // real arithmetic, not a placeholder: 20k fresh + 5k out + 80k×0.1 = 33k
+    assert.ok(visible.includes(c.value), `headline value: ${c.value}`);
+    assert.doesNotMatch(html, /NaN/);
+  });
+}
+
+test("panel footnotes stay inside a narrow docked panel, same size in a wide one", () => {
+  // The panel can be docked into a side column. width:max-content with a flat
+  // 300px cap let the longest footnote (the RU cost line) push the page into
+  // horizontal scrolling; the cap is now viewport-aware and includes padding.
+  // 322px, not 300px: with border-box the number is the OUTER width, so 322
+  // draws exactly the box the old content cap drew — capping the viewport must
+  // not silently narrow every footnote in a wide panel.
+  const now = 1000;
+  const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + 100 }, sevenD: null };
+  for (const html of [
+    buildPanelHtml(ORDER_TOTALS, W, q, now, "ru"),
+    buildCodexPanelHtml(q, now, "ru", { source: "stdio", usage: ORDER_CODEX_USAGE }),
+  ]) {
+    assert.match(html, /box-sizing:border-box/);
+    assert.match(html, /max-width:322px; max-width:min\(322px, calc\(100vw - 36px\)\)/,
+      "the plain cap stays as a fallback for a renderer without CSS min()");
+  }
 });

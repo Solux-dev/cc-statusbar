@@ -157,7 +157,7 @@ Subagents are spawned and given their models by the agent that created them —
 the Lead, or another agent when nesting goes deeper. Open the panel for a
 **Delegated work (subagents)** section:
 
-![The panel, with the delegated-work section at the bottom](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=1)
+![The panel's delegated-work section](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=1)
 
 Spend grouped by model+effort first (the answer to *"which models did it hand my
 work to, and what did that cost"*), then the individual agents **most expensive

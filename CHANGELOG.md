@@ -3,6 +3,35 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.25] — 2026-08-24
+
+### Changed
+
+- **The panel opens on your quota, not on a raw token count.** Nothing was
+  removed and no number changed — only the order of the page. It now answers, in
+  this order:
+
+  1. **which model** is running,
+  2. **how much you have left** — the 5-hour and 7-day windows, plus the context
+     window,
+  3. **where it went** — delegated work,
+  4. **how well it is spent** — cache,
+  5. **the raw number** — token-equivalent, on one line,
+  6. **Details**.
+
+  Previously the page opened with four lines and a disclaimer about the
+  token-equivalent — the block this extension itself treats as a quiet optional
+  extra — and pushed the quota down to third place.
+
+- **"Without cache", "Cache saved" and the pricing disclaimer moved into the
+  ⓘ** on the token-equivalent line. They are one hover away, with the same
+  numbers and the same wording. Five lines at the top of the page became one at
+  the foot of it.
+
+- **The Codex panel was re-ordered the same way**, so switching provider does not
+  rearrange the page under you. While Codex has not answered yet, the line shows
+  a dash on its own instead of three blank rows that read as zeros.
+
 ## [1.0.24] — 2026-08-24
 
 ### Changed

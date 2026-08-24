@@ -243,7 +243,22 @@ the lead's spend by ~10%** of its total.
   token-equivalent jump after an update, with no explanation, will read it as a
   bug.
 
-## Panel re-order (proposed, separable)
+## Panel re-order — **shipped in 1.0.25** (release B)
+
+Built as specified below, with two additions decided during the work:
+
+- The **Codex panel** was re-ordered identically. It is a second page in the same
+  extension; leaving it on the old order would rearrange the page under a user
+  who switches provider. Its cost line gained the same ⓘ, and the shared
+  `hintSpan` / hover CSS moved to module scope so both panels hover alike.
+- **Nothing is shown blank.** While Codex has not answered yet there is no
+  comparison to draw, so the cost line stands alone with a dash instead of three
+  empty rows — blank "without cache" / "saved" rows read as zeros.
+
+Order locked by tests (`the page reads left → where → how well → raw number`,
+plus the Codex twin and a check that the ⓘ still carries every moved figure).
+
+
 
 Measured against the real screens: the panel opens with **four lines and a
 disclaimer** about the token-equivalent — the block that

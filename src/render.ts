@@ -700,6 +700,36 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** A label (or a whole sentence) plus its ⓘ footnote. The visible text must read
+ *  on its own — the footnote adds the full story, never carries it. Shared by
+ *  both panels so a hover behaves identically whichever provider is active. */
+function hintSpan(label: string, hint: string): string {
+  return `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
+}
+
+/** Styling for `hintSpan`, identical in both panels. */
+const HINT_CSS = `
+  .hint { position:relative; opacity:.9; border-bottom:1px dotted currentColor; cursor:help; outline:none; }
+  .hint .tip {
+    visibility:hidden; opacity:0; position:absolute; left:0; bottom:140%; z-index:10;
+    /* Viewport-aware: the panel can be docked into a narrow side column, and the
+       longest footnote (the RU cost line) would otherwise push the whole page
+       into horizontal scrolling. border-box keeps padding inside the cap, so
+       the number is the OUTER width — 322px reproduces exactly the box the flat
+       300px content cap used to draw, and 36px is the body's 18px side padding
+       doubled. The plain declaration first is a fallback: a renderer without
+       CSS min() drops the second line and keeps a cap instead of none. */
+    box-sizing:border-box;
+    width:max-content; max-width:322px; max-width:min(322px, calc(100vw - 36px));
+    padding:8px 10px; border-radius:6px;
+    font-size:12px; font-weight:normal; line-height:1.45; white-space:normal; text-align:left;
+    background:var(--vscode-editorHoverWidget-background, var(--vscode-menu-background, #252526));
+    color:var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+    border:1px solid var(--vscode-editorHoverWidget-border, rgba(128,128,128,.35));
+    box-shadow:0 2px 8px rgba(0,0,0,.35); transition:opacity .1s ease; pointer-events:none;
+  }
+  .hint:hover .tip, .hint:focus .tip { visibility:visible; opacity:1; }`;
+
 /** Full HTML document for the persistent webview panel — same numbers as the
  *  tooltip, themed with VS Code variables. Pure: no VS Code imports, no scripts
  *  (the extension re-renders this string on each tick). */
@@ -722,7 +752,9 @@ export function buildPanelHtml(
   const saved = Math.max(0, noCache - eff);
   const mult = eff > 0 ? fmtMult(noCache / eff) : "1";
 
-  // headline: cost comparison + savings multiplier (lead with the answer)
+  // Identity only — which model and effort produced the numbers below. The page
+  // now opens on "how much have I got left" (quota), so the token-equivalent
+  // block moved to the foot of the page; see `costSection`.
   const rows: string[] = [];
   const identity = [
     modelLine(model, m),
@@ -732,11 +764,8 @@ export function buildPanelHtml(
   for (const line of identity) {
     rows.push(`<div class="ctxrow">${esc(line.replace(/\*\*/g, ""))}</div>`);
   }
-  if (identity.length) rows.push(`<div class="sep"></div>`);
-  rows.push(`<div class="row big"><span>${esc(m.panelCostLabel)}</span><b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="row"><span>${esc(m.panelNoCacheLabel)}</span><b>≈ ${fmtTokens(noCache)} ${esc(m.tok)}</b></div>`);
-  rows.push(`<div class="row save"><span>${esc(m.panelSavedLabel)}</span><b>≈ ${fmtTokens(saved)} ${esc(m.tok)} <span class="mult">${esc(m.lowerMult(mult))}</span></b></div>`);
-  rows.push(`<div class="sub">${esc(m.panelTokenCostNote)}</div>`);
+  // No closing rule here: the next block is an <h3> section, and h3 already
+  // draws the same short rule above itself. Two rules in a row read as a gap.
 
   const quotaBlock: string[] = [];
   const windowRow = (
@@ -824,12 +853,7 @@ export function buildPanelHtml(
   }
 
   // cache insight: auto-detected tier + descriptive hit rate, each with a
-  // hover footnote (title=) so any user can learn what the line means.
-  // A label (or a whole sentence) plus its ⓘ footnote. The visible text must
-  // read on its own — the footnote adds the full story, never carries it.
-  const hintSpan = (label: string, hint: string): string =>
-    `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
-
+  // hover footnote (ⓘ) so any user can learn what the line means.
   let cacheSection = "";
   if (cache && (cache.tier || cache.hitRatePct != null)) {
     const crows: string[] = [];
@@ -919,6 +943,22 @@ export function buildPanelHtml(
       `<div class="sub">${esc(note)}</div>`;
   }
 
+  // Token-equivalent — ONE line, at the foot of the page. The reader opens the
+  // panel to learn how much quota is left, not to read a raw token count, and
+  // product-direction.md itself demoted this block to "a quiet optional extra".
+  // The two curiosity figures ("without cache", "cache saved") and the
+  // disclaimer moved into this line's ⓘ: nothing is deleted, it is one hover
+  // away. The hint text is composed from the existing labels, so neither
+  // language can drift out of sync with the other.
+  const costHint =
+    `${m.panelNoCacheLabel}: ≈ ${fmtTokens(noCache)} ${m.tok}. ` +
+    `${m.panelSavedLabel}: ≈ ${fmtTokens(saved)} ${m.tok} ${m.lowerMult(mult)}. ` +
+    m.panelTokenCostNote;
+  const costSection =
+    `<div class="sep"></div>` +
+    `<div class="row">${hintSpan(m.panelCostLabel, costHint)}` +
+    `<b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`;
+
   // muted technical breakdown
   const detailsSection =
     `<h3>${esc(m.panelDetailsHeader)}</h3>` +
@@ -949,9 +989,6 @@ export function buildPanelHtml(
   .sep { width:44%; height:1px; margin:14px 0 12px;
          background: var(--vscode-panel-border, rgba(128,128,128,.32)); }
   .row { display:flex; justify-content:space-between; align-items:baseline; padding:3px 0; }
-  .row.big b { font-size: 16px; }
-  .row.save b { color: var(--cc-green); }
-  .row.save .mult { opacity:.8; font-weight:normal; font-size:12px; }
   .row span { opacity:.9; } .row b { font-variant-numeric: tabular-nums; }
   .sub { opacity:.6; font-size:12px; padding:1px 0 6px; }
   .ctxrow { padding:6px 0 2px; opacity:.85; font-variant-numeric: tabular-nums; }
@@ -962,18 +999,7 @@ export function buildPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.65; font-size:12px; }
-  .hint { position:relative; opacity:.9; border-bottom:1px dotted currentColor; cursor:help; outline:none; }
-  .hint .tip {
-    visibility:hidden; opacity:0; position:absolute; left:0; bottom:140%; z-index:10;
-    width:max-content; max-width:300px; padding:8px 10px; border-radius:6px;
-    font-size:12px; font-weight:normal; line-height:1.45; white-space:normal; text-align:left;
-    background:var(--vscode-editorHoverWidget-background, var(--vscode-menu-background, #252526));
-    color:var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
-    border:1px solid var(--vscode-editorHoverWidget-border, rgba(128,128,128,.35));
-    box-shadow:0 2px 8px rgba(0,0,0,.35); transition:opacity .1s ease; pointer-events:none;
-  }
-  .hint:hover .tip, .hint:focus .tip { visibility:visible; opacity:1; }
+  .muted { opacity:.65; font-size:12px; }${HINT_CSS}
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>
@@ -981,8 +1007,9 @@ export function buildPanelHtml(
   <h2>${esc(m.panelTitle)}</h2>
   ${rows.join("\n  ")}
   ${quotaSection}
-  ${cacheSection}
   ${subagentSection}
+  ${cacheSection}
+  ${costSection}
   ${detailsSection}
   <div class="legend">${esc(m.panelLegend)}</div>
 </body>
@@ -998,29 +1025,31 @@ export function buildCodexPanelHtml(
   const m = messages(lang);
   const economy = codexEconomy(details);
 
-  const usageRows: string[] = [];
+  // Identity only, same as the Claude panel: the page opens on the quota.
+  const identityRows: string[] = [];
   const identityLines = [modelLine(details.model, m), effortLine(details.model, m)].filter(Boolean) as string[];
   for (const line of identityLines) {
-    usageRows.push(`<div class="ctxrow">${esc(line.replace(/\*\*/g, ""))}</div>`);
+    identityRows.push(`<div class="ctxrow">${esc(line.replace(/\*\*/g, ""))}</div>`);
   }
-  if (identityLines.length) usageRows.push(`<div class="sep"></div>`);
+
+  // Token-equivalent — one line at the foot, its extras in the ⓘ. Kept in step
+  // with the Claude panel on purpose: switching provider must not rearrange the
+  // page under the reader.
+  const costRows: string[] = [];
   if (economy) {
-    usageRows.push(
-      `<div class="row big"><span>${esc(m.codexPanelCostLabel)}</span><b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
-    );
-    usageRows.push(
-      `<div class="row"><span>${esc(m.codexPanelNoCacheLabel)}</span><b>≈ ${fmtTokens(economy.noCache)} ${esc(m.tok)}</b></div>`
-    );
-    usageRows.push(
-      `<div class="row save"><span>${esc(m.codexPanelSavedLabel)}</span><b>≈ ${fmtTokens(economy.saved)} ${esc(m.tok)} <span class="mult">${esc(m.codexLowerMult(economy.mult))}</span></b></div>`
+    const costHint =
+      `${m.codexPanelNoCacheLabel}: ≈ ${fmtTokens(economy.noCache)} ${m.tok}. ` +
+      `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok} ${m.codexLowerMult(economy.mult)}. ` +
+      m.codexPanelTokenCostNote;
+    costRows.push(
+      `<div class="row">${hintSpan(m.codexPanelCostLabel, costHint)}` +
+        `<b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
     );
   } else {
-    usageRows.push(`<div class="row big"><span>${esc(m.codexPanelCostLabel)}</span><b>—</b></div>`);
-    usageRows.push(`<div class="row"><span>${esc(m.codexPanelNoCacheLabel)}</span><b>—</b></div>`);
-    usageRows.push(`<div class="row save"><span>${esc(m.codexPanelSavedLabel)}</span><b>—</b></div>`);
-    usageRows.push(`<div class="empty">${esc(m.codexPanelUsageWaiting)}</div>`);
+    costRows.push(`<div class="row">${hintSpan(m.codexPanelCostLabel, m.codexPanelTokenCostNote)}<b>—</b></div>`);
+    costRows.push(`<div class="empty">${esc(m.codexPanelUsageWaiting)}</div>`);
   }
-  usageRows.push(`<div class="sub">${esc(m.codexPanelTokenCostNote)}</div>`);
+  const costSection = `<div class="sep"></div>${costRows.join("")}`;
 
   const quotaRows: string[] = [];
   const windowRow = (label: string, w: QuotaWindow | null, windowSec: number): void => {
@@ -1084,9 +1113,6 @@ export function buildCodexPanelHtml(
   .row { display:flex; justify-content:space-between; align-items:baseline; gap:14px; padding:3px 0; }
   .row span { opacity:.9; min-width:0; overflow-wrap:anywhere; }
   .row b { font-variant-numeric: tabular-nums; white-space:nowrap; }
-  .row.big b { font-size: 16px; }
-  .row.save b { color: var(--cc-green); }
-  .row.save .mult { opacity:.8; font-weight:normal; font-size:12px; }
   .row .soft, .soft { opacity:.7; font-weight:600; }
   .sub { opacity:.6; font-size:12px; line-height:1.45; padding:2px 0 6px; }
   .ctxrow { padding:6px 0 2px; opacity:.85; font-variant-numeric: tabular-nums; }
@@ -1101,15 +1127,16 @@ export function buildCodexPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.55; }
+  .muted { opacity:.55; }${HINT_CSS}
 </style>
 </head>
 <body>
   <h2>${esc(m.codexPanelTitle)}</h2>
-  ${usageRows.join("\n  ")}
+  ${identityRows.join("\n  ")}
   ${quotaSection}
   ${contextSection}
   ${cacheSection}
+  ${costSection}
   ${detailsSection}
 </body>
 </html>`;
