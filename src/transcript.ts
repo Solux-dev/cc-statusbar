@@ -10,10 +10,14 @@ import {
   ContextInfo,
   CacheTier,
   AgentDigest,
+  IdleRebuild,
   agentDigest,
   sumTranscript,
   addTotals,
+  addRebuild,
   emptyTotals,
+  emptyRebuild,
+  idleRebuildOf,
   lastAssistantContext,
   lastCacheTier,
   cacheHitRatePct,
@@ -83,6 +87,8 @@ export interface SubagentInfo {
   parentAgentId: string | null;
   totals: Totals;
   lastTurnMs: number;
+  /** What this agent's own idle gaps cost — see IdleRebuild. */
+  rebuild: IdleRebuild;
 }
 
 /** Parse cache for agent files: an agent's transcript is APPEND-ONLY and most of
@@ -164,16 +170,27 @@ export function readSubagents(mainTranscript: string): SubagentInfo[] {
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size && cached.metaStamp === stamp) {
       entry = cached;
     } else {
+      const logUnchanged = Boolean(cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size);
+      let raw: string | null = null;
+      if (!logUnchanged) {
+        try {
+          raw = fs.readFileSync(full, "utf-8");
+        } catch {
+          raw = null; // transient failure — not an empty agent log
+        }
+      }
       entry = {
         mtimeMs: st.mtimeMs,
         size: st.size,
         metaStamp: stamp,
-        digest: cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size
-          ? cached.digest // only the metadata changed — no need to re-parse the log
-          : agentDigest(readFileSafe(full)),
+        digest: logUnchanged
+          ? cached!.digest // only the metadata changed — no need to re-parse the log
+          : agentDigest(raw ?? ""),
         meta: readAgentMeta(metaPath),
       };
-      agentCache.set(full, entry);
+      // A failed read must not be remembered under the live file's stamp: it
+      // would pin an agent at zero tokens until its log happened to change.
+      if (logUnchanged || raw != null) agentCache.set(full, entry);
     }
     seenPaths.add(full);
     out.push({
@@ -186,6 +203,7 @@ export function readSubagents(mainTranscript: string): SubagentInfo[] {
       parentAgentId: entry.meta.parentAgentId,
       totals: entry.digest.totals,
       lastTurnMs: entry.digest.lastTurnMs || st.mtimeMs,
+      rebuild: entry.digest.rebuild,
     });
   }
   // Drop cache entries for agents outside the session we are now watching, so a
@@ -195,6 +213,48 @@ export function readSubagents(mainTranscript: string): SubagentInfo[] {
   }
   out.sort((a, b) => b.lastTurnMs - a.lastTurnMs);
   return out;
+}
+
+/** Everything derived from ONE read of the main transcript. Kept together so the
+ *  file is parsed once per change instead of once per derived value per tick. */
+interface MainDigest {
+  totals: Totals;
+  context: ContextInfo;
+  cacheTier: CacheTier;
+  rebuild: IdleRebuild;
+}
+
+/** The main transcript is re-read on every redraw tick, and a long session's
+ *  file reaches tens of megabytes. Cache the parse by mtime+size, exactly like
+ *  the agent files: an append changes both, so a stale digest cannot survive a
+ *  new turn, and an idle session costs one stat() instead of four full parses.
+ *  One entry — the active session — so nothing accumulates. */
+let mainCache: { path: string; mtimeMs: number; size: number; digest: MainDigest } | null = null;
+
+function readMainDigest(main: string, st: fs.Stats | null): MainDigest {
+  if (st && mainCache && mainCache.path === main && mainCache.mtimeMs === st.mtimeMs && mainCache.size === st.size) {
+    return mainCache.digest;
+  }
+  let raw: string | null = null;
+  try {
+    raw = fs.readFileSync(main, "utf-8");
+  } catch {
+    raw = null; // a transient failure (lock, permission blip) — NOT an empty file
+  }
+  const digest: MainDigest = {
+    totals: sumTranscript(raw ?? ""),
+    // MAIN only — subagents have their own windows and must not move this.
+    context: lastAssistantContext(raw ?? ""),
+    // Cache insight describes the MAIN session only: subagents run at 5m and
+    // would mix tiers.
+    cacheTier: lastCacheTier(raw ?? ""),
+    rebuild: idleRebuildOf(raw ?? ""),
+  };
+  // Remember it only when we have BOTH an invalidation key and a real read.
+  // Caching a failed read under the live file's stamp would pin zeros on the
+  // panel until the transcript happened to change — a silent blackout.
+  if (st && raw != null) mainCache = { path: main, mtimeMs: st.mtimeMs, size: st.size, digest };
+  return digest;
 }
 
 /** Sum the active session: main transcript + its subagents/agent-*.jsonl.
@@ -211,6 +271,14 @@ export function readSessionTotals(cwd: string): {
    *  spend went to delegated work. */
   leadTotals: Totals;
   subagents: SubagentInfo[];
+  /** What the LEAD's own idle gaps cost. Reported without advice attached: the
+   *  owner stepping away is not a defect, and a lead's cache_creation spike has
+   *  real non-idle causes (a model switch during the break, compaction). */
+  leadRebuild: IdleRebuild;
+  /** The same, summed over every subagent stream with a KNOWN tier. This is the
+   *  actionable one — an agent cannot switch model mid-run or be compacted, so
+   *  the confounders are absent by construction. */
+  subagentRebuild: IdleRebuild;
 } {
   const main = findActiveTranscript(cwd);
   if (!main) {
@@ -223,36 +291,39 @@ export function readSessionTotals(cwd: string): {
       cacheHitRatePct: null,
       leadTotals: emptyTotals(),
       subagents: [],
+      leadRebuild: emptyRebuild(),
+      subagentRebuild: emptyRebuild(),
     };
   }
 
-  const mainRaw = readFileSafe(main);
-  const mainTotals = sumTranscript(mainRaw);
-  let totals = mainTotals;
-  const context = lastAssistantContext(mainRaw); // MAIN only — do NOT include subagents
-  // Cache insight describes the MAIN session only (consistent with the tier,
-  // which is main-only): subagents are 5m + short-lived and would mix tiers.
-  const cacheTier = lastCacheTier(mainRaw);
-  const cacheHit = cacheHitRatePct(mainTotals);
-  let mtimeMs = 0;
+  let st: fs.Stats | null = null;
   try {
-    mtimeMs = fs.statSync(main).mtimeMs;
+    st = fs.statSync(main);
   } catch {
-    /* ignore */
+    /* ignore — we then read without a cache key */
   }
+  const digest = readMainDigest(main, st);
+  const mainTotals = digest.totals;
+  let totals = mainTotals;
 
   // subagents live in <main-without-ext>/subagents/agent-*.jsonl
   const subagents = readSubagents(main);
-  for (const a of subagents) totals = addTotals(totals, a.totals);
+  let subagentRebuild = emptyRebuild();
+  for (const a of subagents) {
+    totals = addTotals(totals, a.totals);
+    subagentRebuild = addRebuild(subagentRebuild, a.rebuild);
+  }
 
   return {
     totals,
     transcript: main,
-    mtimeMs,
-    context,
-    cacheTier,
-    cacheHitRatePct: cacheHit,
+    mtimeMs: st ? st.mtimeMs : 0,
+    context: digest.context,
+    cacheTier: digest.cacheTier,
+    cacheHitRatePct: cacheHitRatePct(mainTotals),
     leadTotals: mainTotals,
     subagents,
+    leadRebuild: digest.rebuild,
+    subagentRebuild,
   };
 }

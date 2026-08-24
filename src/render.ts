@@ -12,7 +12,9 @@ import {
   QuotaWindow,
   ScopedQuotaWindow,
   PaceLevel,
+  IdleRebuild,
   effectiveTokens,
+  rebuildCost,
   fmtTokens,
   fmtMult,
   fmtRemaining,
@@ -214,9 +216,60 @@ function effortLine(model: ModelView | undefined, m: Messages): string | null {
  *  card must stay readable; the full list lives in the panel. */
 const TOOLTIP_AGENT_GROUPS = 3;
 
+/** What waiting cost, as the UI receives it: the lead's own idle gaps and the
+ *  sum over the subagent streams. */
+export interface RebuildView {
+  lead?: IdleRebuild;
+  subagents?: IdleRebuild;
+}
+
+/** Absolute floor for the reload line. Below this the number is real but not
+ *  worth a director's attention. */
+const REBUILD_MIN_COST = 1_000_000;
+/** …and it must also be this share of the session, for the same reason. */
+const REBUILD_MIN_SESSION_SHARE = 0.03;
+/** The guidance sentence fires on ONE condition: reloads are this share of
+ *  everything the subagents wrote to cache. A second condition ("and at least
+ *  3 separate pauses") was rejected on purpose — a single long pause is not a
+ *  false positive, the tokens were spent either way, and suppressing a true
+ *  number would be complexity bought with accuracy. */
+const REBUILD_ADVICE_SHARE = 0.2;
+
+/** Should the reload figure be shown, and should the guidance sentence come
+ *  with it? Pure, so both thresholds are unit-testable away from the markup.
+ *  The advice is gated on the line being visible: a sentence about reloads with
+ *  no number above it is the always-on advisory that wording rule 5 forbids. */
+export function rebuildDisplay(
+  r: IdleRebuild | undefined,
+  sessionEffective: number,
+  weights: Weights
+): { show: boolean; advise: boolean; cost: number } {
+  if (!r || r.tokens <= 0) return { show: false, advise: false, cost: 0 };
+  const cost = rebuildCost(r, weights);
+  const share = sessionEffective > 0 ? cost / sessionEffective : 0;
+  const show = cost >= REBUILD_MIN_COST && share >= REBUILD_MIN_SESSION_SHARE;
+  const dominant = r.cacheWrite > 0 && r.tokens / r.cacheWrite >= REBUILD_ADVICE_SHARE;
+  return { show, advise: show && dominant, cost };
+}
+
+/** Muted technical breakdown, plus the LEAD's own reloads when it has any.
+ *  RAW tokens here, not weighted: every other number in this line is raw, and a
+ *  reload figure has to be a subset of the cache write printed beside it. */
+function detailsText(totals: Totals, rebuild: RebuildView | undefined, m: Messages): string {
+  const base = m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite));
+  const lead = rebuild?.lead;
+  return lead && lead.tokens > 0 ? `${base} · ${m.detailsRebuild(fmtTokens(lead.tokens))}` : base;
+}
+
 /** One compact tooltip line: how much of this session was delegated, to which
  *  models. Null when the session spawned no subagents. */
-function subagentTooltipLine(list: SubagentView[] | undefined, m: Messages): string | null {
+function subagentTooltipLine(
+  list: SubagentView[] | undefined,
+  m: Messages,
+  weights: Weights,
+  rebuild?: IdleRebuild,
+  sessionEffective = 0
+): string | null {
   if (!list || !list.length) return null;
   const groups = subagentGroups(list);
   const total = groups.reduce((s, g) => s + g.effective, 0);
@@ -227,6 +280,10 @@ function subagentTooltipLine(list: SubagentView[] | undefined, m: Messages): str
   });
   const rest = groups.length - shown.length;
   if (rest > 0) shown.push(m.subagentsMore(rest));
+  // The hover is already dense: the reload fragment clears the same high bar as
+  // the guidance sentence, or it is not there at all.
+  const reb = rebuildDisplay(rebuild, sessionEffective, weights);
+  if (reb.advise) shown.push(m.subagentsRebuildFragment(fmtTokens(reb.cost)));
   return m.subagentsLine(list.length, fmtTokens(total), shown.join(" · "));
 }
 
@@ -416,7 +473,8 @@ export function buildView(
   context?: ContextView,
   cache?: CacheView,
   model?: ModelView,
-  subagents?: SubagentView[]
+  subagents?: SubagentView[],
+  rebuild?: RebuildView
 ): View {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -547,7 +605,7 @@ export function buildView(
   // cache tier — concise, self-explanatory (full footnotes live in the panel)
   if (cache?.tier) sessionLines.push(`- ${m.cacheTierLine(cache.tier)}`);
   // delegated work: which models were spawned and what they cost
-  const sub = subagentTooltipLine(subagents, m);
+  const sub = subagentTooltipLine(subagents, m, weights, rebuild?.subagents, eff);
   if (sub) sessionLines.push(`- ${sub}`);
   if (sessionLines.length) {
     t.push("");
@@ -558,7 +616,7 @@ export function buildView(
   t.push(RULE);
   t.push("");
   // muted technical breakdown
-  t.push(`_${m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite))}_`);
+  t.push(`_${detailsText(totals, rebuild, m)}_`);
   t.push("");
   t.push(m.legend);
   t.push("");
@@ -655,7 +713,8 @@ export function buildPanelHtml(
   cache?: CacheView,
   model?: ModelView,
   subagents?: SubagentView[],
-  leadEffective?: number
+  leadEffective?: number,
+  rebuild?: RebuildView
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
@@ -766,11 +825,14 @@ export function buildPanelHtml(
 
   // cache insight: auto-detected tier + descriptive hit rate, each with a
   // hover footnote (title=) so any user can learn what the line means.
+  // A label (or a whole sentence) plus its ⓘ footnote. The visible text must
+  // read on its own — the footnote adds the full story, never carries it.
+  const hintSpan = (label: string, hint: string): string =>
+    `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
+
   let cacheSection = "";
   if (cache && (cache.tier || cache.hitRatePct != null)) {
     const crows: string[] = [];
-    const hintSpan = (label: string, hint: string): string =>
-      `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
     if (cache.tier) {
       crows.push(
         `<div class="row">${hintSpan(m.panelCacheTierLabel, m.panelCacheTierHint)}` +
@@ -834,19 +896,33 @@ export function buildPanelHtml(
       .join("");
     const more = subagents.length > LIST_CAP ? `<div class="sub">${esc(m.subagentsMore(subagents.length - LIST_CAP))}</div>` : "";
 
+    // What waiting cost. One muted line in the same style as the summary above
+    // it, carrying three facts: how much, why, and how long an agent's cache
+    // lives. It belongs HERE and not in the Cache section: the reader is
+    // already thinking about agents, so it costs one line and no new section.
+    // WEIGHTED tokens, like every figure in this section.
+    const reb = rebuildDisplay(rebuild?.subagents, eff, weights);
+    const rebuildRow = reb.show
+      ? `<div class="sub">${hintSpan(m.panelSubagentsRebuild(fmtTokens(reb.cost)), m.panelSubagentsRebuildHint)}</div>`
+      : "";
+    // The guidance sentence leads the closing note rather than starting a
+    // paragraph of its own — no new block of text for one sentence.
+    const note = reb.advise ? `${m.panelSubagentsRebuildNote} ${m.panelSubagentsNote}` : m.panelSubagentsNote;
+
     subagentSection =
       `<h3>${esc(m.panelSubagentsHeader)}</h3>` +
       `<div class="sub">${esc(m.panelSubagentsSummary(subagents.length, fmtTokens(subTotal), shareText))}</div>` +
+      rebuildRow +
       gRows +
       listRows +
       more +
-      `<div class="sub">${esc(m.panelSubagentsNote)}</div>`;
+      `<div class="sub">${esc(note)}</div>`;
   }
 
   // muted technical breakdown
   const detailsSection =
     `<h3>${esc(m.panelDetailsHeader)}</h3>` +
-    `<div class="sub">${esc(m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite)))}</div>`;
+    `<div class="sub">${esc(detailsText(totals, rebuild, m))}</div>`;
 
   return `<!DOCTYPE html>
 <html lang="${lang}">

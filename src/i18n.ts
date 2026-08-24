@@ -100,6 +100,20 @@ export interface Messages {
   panelSubagentsHeader: string;
   panelSubagentsSummary: (count: number, total: string, share: string) => string;
   panelSubagentsNote: string;
+  /** One muted line under the delegated-work summary: how much of what the
+   *  agents spent went on reloading context after a pause. Shown only above the
+   *  threshold — an advisory line that is always there is noise. */
+  panelSubagentsRebuild: (cost: string) => string;
+  /** Hover footnote (ⓘ) for that line. The visible line must read without it. */
+  panelSubagentsRebuildHint: string;
+  /** Appended to the closing note when reloads dominate what the agents wrote.
+   *  States the cause and the measured alternative — never a grade. */
+  panelSubagentsRebuildNote: string;
+  /** Tooltip fragment appended to the subagents line, same high bar. */
+  subagentsRebuildFragment: (cost: string) => string;
+  /** The LEAD's own reloads, muted, in Details — raw tokens, no advice: the
+   *  owner stepping away is not a defect. */
+  detailsRebuild: (tokens: string) => string;
   // tooltip
   title: string;
   // token-equivalent headline: one compact line (with cache · without · ×lower)
@@ -246,6 +260,17 @@ const EN: Messages = {
     `${count} subagent${count === 1 ? "" : "s"} · ≈ ${total} tok — ${share}% of this session's consumption`,
   panelSubagentsNote:
     "Models here are chosen by the agent that spawned each worker — the Lead, or another agent when depth > 1. Ask for a specific model in your task if a cheaper one would do: this is where delegated tokens actually go.",
+  panelSubagentsRebuild: (cost) =>
+    `of that, ≈ ${cost} went on reloading context after pauses — an agent's cache stays warm for 5 minutes`,
+  panelSubagentsRebuildHint:
+    "While an agent waits, its cache goes cold — 5 minutes for subagents, 1 hour for the main session. " +
+    "After a long enough pause it loads its whole context again and pays for that as a new cache write. " +
+    "This is how many tokens went into such reloads. A pause is sometimes unavoidable, but it is paid for " +
+    "all the same — which is why the figure is shown as it is.",
+  panelSubagentsRebuildNote:
+    "Usually an agent left open while another one works. Past five minutes of waiting, a fresh agent costs less than the one that waited.",
+  subagentsRebuildFragment: (cost) => `${cost} reloaded after pauses`,
+  detailsRebuild: (tokens) => `after-idle reloads ${tokens}`,
   title: "**Claude Code — session usage**",
   costCompact: (withCache, noCache, mult) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
@@ -306,8 +331,10 @@ const EN: Messages = {
       ? "🗄 Cache: 1-hour tier — survives ~1h idle"
       : "🗄 Cache: 5-minute tier — pauses over 5 min rebuild it",
   panelCacheHeader: "Cache",
-  panelCacheTierLabel: "Tier",
-  panelCacheTierValue: { "1h": "1-hour", "5m": "5-minute" },
+  // "Tier" was jargon. The label + value now read as one sentence — the hover
+  // footnote below is unchanged and still carries the full explanation.
+  panelCacheTierLabel: "Cache stays warm",
+  panelCacheTierValue: { "1h": "1 hour idle", "5m": "5 minutes idle" },
   panelCacheTierHint:
     "How long your prompt cache stays warm while you are idle — read from this session, not configured. " +
     "1-hour: a subscription within its plan limit, so stepping away for up to an hour stays cheap. " +
@@ -410,6 +437,17 @@ const RU: Messages = {
     `${count} ${pluralRu(count, "саб-агент", "саб-агента", "саб-агентов")} · ≈ ${total} ток — ${share}% расхода этой сессии`,
   panelSubagentsNote:
     "Модель выбирает тот, кто запустил агента: лид — или другой агент, если уровень больше 1. Если задача проще, попросите конкретную модель прямо в ТЗ: именно сюда уходят делегированные токены.",
+  panelSubagentsRebuild: (cost) =>
+    `из них ≈ ${cost} ушло на повторную загрузку контекста после пауз — кэш агента держится 5 минут`,
+  panelSubagentsRebuildHint:
+    "Пока агент ждёт, его кэш остывает — 5 минут у субагентов, 1 час у основной сессии. " +
+    "После долгой паузы он загружает весь свой контекст заново и платит за это как за новую запись. " +
+    "Здесь показано, сколько токенов ушло на такие повторные загрузки. Пауза бывает вынужденной, " +
+    "но оплачена она в любом случае — поэтому цифра показана как есть.",
+  panelSubagentsRebuildNote:
+    "Обычно это агент, оставленный открытым, пока работает другой. После пяти минут ожидания новый агент обходится дешевле, чем тот, который ждал.",
+  subagentsRebuildFragment: (cost) => `${cost} на повторную загрузку после пауз`,
+  detailsRebuild: (tokens) => `повторные загрузки после простоя ${tokens}`,
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
@@ -470,8 +508,10 @@ const RU: Messages = {
       ? "🗄 Кэш: часовой тир — живёт ~1ч простоя"
       : "🗄 Кэш: 5-мин тир — паузы дольше 5 мин перестраивают его",
   panelCacheHeader: "Кэш",
-  panelCacheTierLabel: "Тир",
-  panelCacheTierValue: { "1h": "часовой", "5m": "5-минутный" },
+  // «Тир» — жаргон. Метка и значение теперь читаются одной фразой; сноска ⓘ
+  // ниже не изменилась и по-прежнему объясняет всё полностью.
+  panelCacheTierLabel: "Кэш держится",
+  panelCacheTierValue: { "1h": "1 час простоя", "5m": "5 минут простоя" },
   panelCacheTierHint:
     "Сколько prompt-кэш остаётся «тёплым», пока вы не печатаете — определяется из этой сессии, не настраивается. " +
     "Часовой: подписка в пределах лимита плана — можно отойти на час, и это дёшево. " +

@@ -2,7 +2,7 @@
   "name": "cc-statusbar",
   "displayName": "Claude/Codex Usage — Quota & Context Statusbar",
   "description": "See Claude Code and Codex quota, context, token-equivalent, and cache signals right in the VS Code status bar. Switch between Auto, Claude Code, and Codex from the hover menu.",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "publisher": "solux-dev",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -142,12 +142,16 @@
         "ccStatusbar.cacheReadWeight": {
           "type": "number",
           "default": 0.1,
+          "minimum": 0,
+          "maximum": 100,
           "description": "Weight of cache-read tokens in the token-equivalent metric (cache read ≈ 10% of a fresh input token). Keep in sync with tools/session-cost.py."
         },
         "ccStatusbar.cacheWriteWeight": {
           "type": "number",
           "default": 1.25,
-          "description": "Weight of cache-write tokens in the token-equivalent metric (cache write ≈ 125%). Keep in sync with tools/session-cost.py."
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Weight of cache-write tokens whose TTL tier the transcript does NOT state. Writes with a stated tier are priced at the real tariff instead: 1-hour ×2.0, 5-minute ×1.25."
         },
         "ccStatusbar.quota.enabled": {
           "type": "boolean",

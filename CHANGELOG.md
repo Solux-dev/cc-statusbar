@@ -3,6 +3,67 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.24] — 2026-08-24
+
+### Changed
+
+- **Your token-equivalent figure goes up after this update — the old one was too
+  low.** A cache write was priced at a flat ×1.25, whatever it was. But the price
+  depends on how long the cache is kept: a **1-hour** write costs **2.0×** a
+  fresh input token, a **5-minute** write **1.25×**. The main session writes
+  almost exclusively to the 1-hour tier, so its own spend was understated by
+  about 10%. Measured across real sessions, the headline moves **1–9%** — the
+  more of the work was delegated to subagents (which run at 5 minutes), the less
+  it moves. Nothing about your usage changed; only the arithmetic got right.
+
+  - The tier is **read from the transcript**
+    (`cache_creation.ephemeral_{1h,5m}_input_tokens`), never assumed.
+  - `ccStatusbar.cacheWriteWeight` still exists and still defaults to 1.25, but
+    it now applies **only** to writes whose tier the transcript does not state.
+    A tuned setting keeps meaning exactly what it meant.
+
+- **The panel's cache row drops the word "Tier".** It now reads **"Cache stays
+  warm — 1 hour idle"** (RU: «Кэш держится — 1 час простоя»). Same footnote,
+  same data, one less word to look up.
+
+### Added
+
+- **What waiting costs.** While an agent sits idle its cache goes cold — 5
+  minutes for a subagent, 1 hour for the main session. After a long enough pause
+  it loads its whole context again and pays for that as a new cache write. That
+  spend was invisible, and on the sessions measured here it is **over half** of
+  everything the subagents write to cache. The delegated-work section now says
+  how much, in one line:
+
+  > of that, ≈ 6M went on reloading context after pauses — an agent's cache
+  > stays warm for 5 minutes
+
+  - **Shown only when it is worth your attention:** the reloads must cost at
+    least 1M tokens **and** 3% of the session. Below that, nothing appears.
+  - **One sentence of guidance** is added when reloads are 20%+ of everything
+    the agents wrote to cache — the point where there is something to change.
+  - **The main session's own reloads** are reported in **Details**, with no
+    advice attached: stepping away from the keyboard is not a defect.
+  - **Never coloured.** This is information, not a quota with consequences —
+    the same rule the context dot follows.
+  - **The status bar is unchanged.** No new segment; it stays quota + context.
+
+### Notes
+
+- Detection looks at a **pair**, never a spike alone: a gap longer than the TTL
+  of the cache that was live at that moment, immediately followed by a write.
+  The tier is taken **per gap**, not once per file, because a session that
+  passes its plan limit switches 1h → 5m mid-run. Turns are deduplicated by
+  `message.id` first (without it the figure inflates ~2.5×); a turn whose clock
+  cannot be read, or whose clock goes backwards, is a **barrier** — no gap is
+  measured across it; and with no stated tier nothing is counted at all, because
+  a TTL is never assumed.
+- The main transcript is now parsed **once per change** instead of once per
+  derived value per tick (cached by mtime+size, like the agent files already
+  were), so the new metric costs nothing on an idle session.
+- `statusline.py`, the optional zero-request quota bridge the README has always
+  referred to, now actually ships in the repository.
+
 ## [1.0.23] — 2026-08-09
 
 ### Fixed

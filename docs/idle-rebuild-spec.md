@@ -1,6 +1,8 @@
 # Design spec — idle rebuild (what waiting costs) + panel re-order
 
-Status: **PROPOSED** (2026-08-24). Grounded in a measurement over a real 8-day
+Status: **IMPLEMENTED** in 1.0.24 — everything except the panel re-order, which
+stays proposed and ships separately (see "Decisions taken", point 1).
+Written 2026-08-24. Grounded in a measurement over a real 8-day
 sample of Claude Code transcripts, deduplicated by `message.id` (the 1.0.17
 rule). Extends [`cache-tier-spec.md`](cache-tier-spec.md) — read that first.
 
@@ -164,17 +166,24 @@ Russian:
 
 Per stream (main transcript, and each `subagents/agent-*.jsonl` separately):
 
-- **Turn list** = assistant turns with a `usage` object, **deduplicated by
-  `message.id`** (without dedup the figure inflates ~2.5×; this is the 1.0.17
-  rule and it must not be re-broken here), sorted by `timestamp`.
-- **TTL of the stream** = from the existing tier detection: `1h` → 3600s,
-  `5m` → 300s. If the tier is unknown, the stream contributes **nothing** —
-  never assume a TTL (the standing rule of `cache-tier-spec.md`).
+- **Turn list** = assistant turns **that carry a `usage` object**, in
+  **transcript order** (never re-sorted), **deduplicated by `message.id`**
+  (without dedup the figure inflates ~2.5×; this is the 1.0.17 rule and it must
+  not be re-broken here). A placeholder without `usage` — an interrupt, an
+  error — is not a turn: counting it would advance the clock and hide a real
+  pause behind it.
+- **TTL in force** = from the most recent write whose tier the transcript
+  states: `1h` → 3600s, `5m` → 300s. Taken **per gap, not per file**: a session
+  that passes its plan limit switches 1h → 5m mid-run, and judging an old gap by
+  the tier the session ended on invents rebuilds in one direction and loses them
+  in the other. Until some write has stated a tier, nothing is counted — never
+  assume a TTL (the standing rule of `cache-tier-spec.md`).
 - **Idle rebuild** = for consecutive turns `i-1`, `i`: if
-  `t(i) - t(i-1) > TTL`, then `cache_creation_input_tokens(i)` counts as a
-  rebuild.
-- **Cost** = rebuild tokens × that stream's write weight (see the weight fix
-  below).
+  `t(i) - t(i-1) > TTL`, then turn `i`'s cache write counts as a rebuild,
+  keeping its own tier split.
+- **Cost** = the rebuild's own tiered split at the same weights the session
+  headline uses (`1h` ×2.0, `5m` ×1.25, unstated → the setting), so the figure
+  is always a true subset of the number printed beside it.
 - **Share** = rebuild cost ÷ session token-equivalent, rounded to a whole
   percent; `<1` rather than `0` when non-zero (the existing rule from the
   subagents section).
@@ -182,11 +191,19 @@ Per stream (main transcript, and each `subagents/agent-*.jsonl` separately):
 
 Edge cases:
 
-- Tier unknown → stream excluded, and the line says nothing about it.
+- No tier ever stated → nothing is counted, and the line says nothing about it.
 - Fewer than 2 turns → no gaps, contributes 0.
-- Missing/unparseable `timestamp` → that turn is skipped for gap purposes only;
-  its tokens still count in the totals.
-- Clock skew (negative gap) → treated as 0, never as a rebuild.
+- Missing/unparseable `timestamp` → that turn is a **barrier**: its tokens still
+  count in the totals, but no gap is measured across it. Bridging over it would
+  invent a pause that the skipped turn disproves.
+- Clock skew (a timestamp at or before the previous one) → also a barrier, and
+  it poisons the **following** interval too: the next gap would otherwise be
+  measured against a clock we have just seen misbehave. The tier such a turn
+  states is still remembered — the skew makes its *time* untrustworthy, not its
+  statement about which cache was written.
+- A `cache_creation` breakdown that contradicts the top-level total, or carries
+  a negative/non-finite count → the write keeps its total but is treated as
+  **untiered**, and cannot report a tier anywhere in the UI.
 
 ## Thresholds — when each thing appears
 
@@ -200,6 +217,12 @@ Edge cases:
 Rationale: below 3% the number is real but not worth a director's attention;
 the 20% bar is where the measured sample sat (53%), i.e. where there
 is genuinely something to change.
+
+**Refinement made during implementation (1.0.24):** the guidance sentence and
+the tooltip fragment are additionally gated on the reload *line* being visible.
+A sentence advising about reloads with no figure above it is precisely the
+always-on advisory that wording rule 5 forbids. In practice the two conditions
+almost always coincide; when they do not, silence wins.
 
 Never coloured red or yellow. This is information, not a quota with
 consequences — the same rule the context dot already follows.

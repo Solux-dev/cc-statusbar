@@ -73,11 +73,13 @@ export function codexTotals(usage: CodexTokenUsage | null): Totals {
   const input = Math.max(0, (total.inputTokens || 0) - (total.cachedInputTokens || 0));
   const output = total.outputTokens || 0;
   return {
+    ...emptyTotals(),
     input,
     output,
     work: input + output,
     cacheRead: total.cachedInputTokens || 0,
-    cacheWrite: 0,
+    // Codex does not expose a cache-write count at all (let alone its tier), so
+    // every write bucket stays 0 — shown as unavailable, never guessed.
   };
 }
 

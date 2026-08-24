@@ -8,13 +8,33 @@ export interface Totals {
   output: number;
   work: number; // input + output
   cacheRead: number;
-  cacheWrite: number;
+  cacheWrite: number; // total, = cacheWrite1h + cacheWrite5m + cacheWriteUnknown
+  /** Cache writes the transcript attributes to the 1-hour tier (weighted ×2.0). */
+  cacheWrite1h: number;
+  /** Cache writes attributed to the 5-minute tier (weighted ×1.25). */
+  cacheWrite5m: number;
+  /** Writes whose tier the transcript does not state — weighted with the
+   *  `cacheWriteWeight` SETTING, so an unknown tier never silently changes
+   *  meaning for anyone who tuned that number. */
+  cacheWriteUnknown: number;
 }
 
 export interface Weights {
   cacheRead: number; // default 0.1
+  /** Weight for a cache write of UNKNOWN tier only. Tiered writes use the
+   *  constants below — a 1-hour write really does cost 2× a fresh input token
+   *  and a 5-minute write 1.25×, so one blended number understated any session
+   *  that ran on the 1-hour tier (measured: ~10% of the lead's own spend). */
   cacheWrite: number; // default 1.25
 }
+
+/** Anthropic prompt-cache write prices, relative to a fresh input token.
+ *  Not settings: they are the published tariff, not a preference. */
+export const CACHE_WRITE_WEIGHT_1H = 2.0;
+export const CACHE_WRITE_WEIGHT_5M = 1.25;
+
+/** How long a cache entry survives idle, per tier, in seconds. */
+export const CACHE_TTL_SECONDS: Record<"1h" | "5m", number> = { "1h": 3600, "5m": 300 };
 
 export interface QuotaWindow {
   pct: number; // 0..100
@@ -49,7 +69,16 @@ export interface ContextInfo {
 }
 
 export function emptyTotals(): Totals {
-  return { input: 0, output: 0, work: 0, cacheRead: 0, cacheWrite: 0 };
+  return {
+    input: 0,
+    output: 0,
+    work: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cacheWrite1h: 0,
+    cacheWrite5m: 0,
+    cacheWriteUnknown: 0,
+  };
 }
 
 /** Cache-write tokens for one usage block, robust across Claude Code versions.
@@ -59,18 +88,72 @@ export function emptyTotals(): Totals {
  *  carried the real value (fixed in the v2.1.152 changelog, 2026-05-27).
  *  Current transcripts populate the top-level field, so this only matters for
  *  older sessions — verified against real data 2026-05-31. */
+/** One token counter out of a transcript, sanitized. A value that is negative,
+ *  non-numeric, or not finite is not a smaller count — it is a broken field.
+ *  Letting it through would SUBTRACT from the session total, or print `NaN` /
+ *  `Infinity` where a number belongs. Every counter we read goes through here. */
+export function tokenCount(v: any): number {
+  // The upper bound is not paranoia about big sessions — the largest window in
+  // existence is 1e6 tokens. It stops a fabricated counter (say 1e308) from
+  // summing to Infinity two additions later, where the difference of two
+  // infinities becomes NaN and every figure on screen turns to nonsense.
+  return typeof v === "number" && Number.isFinite(v) && v > 0 && v <= Number.MAX_SAFE_INTEGER ? v : 0;
+}
+
 export function cacheWriteTokens(u: any): number {
-  const top = u?.cache_creation_input_tokens || 0;
+  const top = tokenCount(u?.cache_creation_input_tokens);
   if (top) return top;
+  // A broken or absent top-level field falls through to the nested breakdown,
+  // which on Claude Code < v2.1.152 is where the real value lived.
   const c = u?.cache_creation;
-  if (c) return (c.ephemeral_5m_input_tokens || 0) + (c.ephemeral_1h_input_tokens || 0);
+  if (c) return tokenCount(c.ephemeral_5m_input_tokens) + tokenCount(c.ephemeral_1h_input_tokens);
   return 0;
 }
 
-/** Effective (cache-weighted) tokens — comparable consumption number. */
-export function effectiveTokens(t: Totals, w: Weights): number {
-  return Math.round(t.work + w.cacheRead * t.cacheRead + w.cacheWrite * t.cacheWrite);
+/** Split one usage block's cache write across TTL tiers. The nested
+ *  `cache_creation.ephemeral_{1h,5m}_input_tokens` breakdown is the only place
+ *  the tier is STATED, so it is authoritative; whatever the top-level total
+ *  counts beyond it has no stated tier and stays `unknown`. We never move
+ *  tokens into a tiered bucket on a guess — that would inflate the headline. */
+export function cacheWriteSplit(u: any): { h1: number; m5: number; unknown: number } {
+  const total = cacheWriteTokens(u);
+  const c = u?.cache_creation;
+  const h1 = c?.ephemeral_1h_input_tokens || 0;
+  const m5 = c?.ephemeral_5m_input_tokens || 0;
+  const stated = h1 + m5;
+  // Any breakdown we cannot trust makes the whole write untiered. That covers
+  // an impossible value (negative or non-finite) and the case where the nested
+  // fields claim MORE than the top-level total — either way the shape is
+  // corrupt, and the conservative reading is "tier unknown". The split must
+  // never change what the transcript says was written, only label it.
+  const sane = h1 === tokenCount(h1) && m5 === tokenCount(m5);
+  if (!sane || stated <= 0 || stated > total) return { h1: 0, m5: 0, unknown: total };
+  return { h1, m5, unknown: total - stated };
 }
+
+/** The tier one usage block's write landed on, or null when it states none.
+ *  A turn that wrote to BOTH tiers is reported by its larger share — the point
+ *  is which cache the NEXT turn will be relying on. */
+export function tierOfWrite(u: any): CacheTier {
+  const s = cacheWriteSplit(u);
+  if (s.h1 <= 0 && s.m5 <= 0) return null;
+  return s.h1 >= s.m5 ? "1h" : "5m";
+}
+
+/** Effective (cache-weighted) tokens — comparable consumption number.
+ *  Cache writes are priced per TTL tier: a 1-hour write costs 2× a fresh input
+ *  token, a 5-minute write 1.25×. Only writes with NO stated tier fall back to
+ *  the `cacheWriteWeight` setting. */
+export function effectiveTokens(t: Totals, w: Weights): number {
+  return Math.round(
+    t.work +
+      w.cacheRead * t.cacheRead +
+      CACHE_WRITE_WEIGHT_1H * t.cacheWrite1h +
+      CACHE_WRITE_WEIGHT_5M * t.cacheWrite5m +
+      w.cacheWrite * t.cacheWriteUnknown
+  );
+}
+
 
 /** Sum usage from one transcript's lines (raw jsonl text). Mirrors
  *  session-cost.py parse_session: only assistant messages with a usage block.
@@ -105,16 +188,24 @@ export function sumTranscript(raw: string, includeSidechain = false): Totals {
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
     if (obj.isSidechain && !includeSidechain) continue; // counted via its own agent-*.jsonl
+    // A turn is an assistant entry WITH a usage block. Checking this before the
+    // dedup matters: a placeholder that shares an id with the real turn would
+    // otherwise consume that id and drop the real turn's tokens entirely.
+    const u = obj.message.usage;
+    if (!u) continue;
     const id = obj.message.id || obj.requestId;
     if (id) {
       if (seen.has(id)) continue; // same response, another content-block line — already counted
       seen.add(id);
     }
-    const u = obj.message.usage || {};
-    t.input += u.input_tokens || 0;
-    t.output += u.output_tokens || 0;
-    t.cacheWrite += cacheWriteTokens(u);
-    t.cacheRead += u.cache_read_input_tokens || 0;
+    t.input += tokenCount(u.input_tokens);
+    t.output += tokenCount(u.output_tokens);
+    const split = cacheWriteSplit(u);
+    t.cacheWrite += split.h1 + split.m5 + split.unknown;
+    t.cacheWrite1h += split.h1;
+    t.cacheWrite5m += split.m5;
+    t.cacheWriteUnknown += split.unknown;
+    t.cacheRead += tokenCount(u.cache_read_input_tokens);
   }
   t.work = t.input + t.output;
   return t;
@@ -148,7 +239,7 @@ export function lastAssistantContext(raw: string): ContextInfo {
     const u = obj.message.usage;
     if (!u) continue;
     // latest assistant turn with usage overwrites → ends as the last one.
-    tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + cacheWriteTokens(u);
+    tokens = tokenCount(u.input_tokens) + tokenCount(u.cache_read_input_tokens) + cacheWriteTokens(u);
     // Assigned unconditionally: a newer turn that carries no model must RESET
     // this, not inherit the previous turn's one. Presenting an older model
     // beside newer token counts would be a confident (and wrong) reading.
@@ -170,6 +261,13 @@ export interface AgentDigest {
   totals: Totals;
   /** ms timestamp of the last turn — used to order the list newest-first. */
   lastTurnMs: number;
+  /** This agent's own cache tier, READ from its turns (agents run at 5m in
+   *  practice, but an assumed TTL is exactly what the spec forbids). */
+  tier: CacheTier;
+  /** What this agent's own idle gaps cost. Computed here so the transcript
+   *  cache (mtime+size keyed) covers it too — an agent log is append-only and
+   *  most are finished, so re-scanning every one on every tick is pure waste. */
+  rebuild: IdleRebuild;
 }
 
 /** Digest ONE agent-*.jsonl. Pure (text in, data out) → unit-testable. */
@@ -194,7 +292,14 @@ export function agentDigest(raw: string): AgentDigest {
     const ts = Date.parse(obj.timestamp || "");
     if (!Number.isNaN(ts) && ts > lastTurnMs) lastTurnMs = ts;
   }
-  return { model, effort, totals: sumTranscript(raw, true), lastTurnMs };
+  return {
+    model,
+    effort,
+    totals: sumTranscript(raw, true),
+    lastTurnMs,
+    tier: lastCacheTier(raw, true),
+    rebuild: idleRebuildOf(raw, true),
+  };
 }
 
 /** Context-fill colour dot. Purely INFORMATIONAL: context has no reset and no
@@ -228,13 +333,17 @@ export function cacheHitRatePct(t: Totals): number | null {
   return Math.round((t.cacheRead / denom) * 100);
 }
 
-/** The MAIN session's current cache tier, decided by the most recent
- *  main-conversation assistant turn that WROTE to cache: "1h" / "5m" from the
- *  nested `cache_creation.ephemeral_{1h,5m}_input_tokens`. Null when no write
- *  turn is observable (or only old transcripts lacking the nested breakdown).
- *  Subagents (`isSidechain`) are always 5m and are excluded so they can't
- *  confound the main tier. */
-export function lastCacheTier(raw: string): CacheTier {
+/** The stream's current cache tier, decided by the most recent assistant turn
+ *  that WROTE to cache: "1h" / "5m" from the nested
+ *  `cache_creation.ephemeral_{1h,5m}_input_tokens`. Null when no write turn is
+ *  observable (or only old transcripts lacking the nested breakdown) — and a
+ *  null tier must never be replaced by an assumed one.
+ *
+ *  `includeSidechain` picks WHICH file this is, exactly like sumTranscript:
+ *  false for a MAIN transcript (subagent turns are excluded so their 5m tier
+ *  cannot confound the main one), true for an agent-*.jsonl, where every turn
+ *  is a sidechain and excluding them would always return null. */
+export function lastCacheTier(raw: string, includeSidechain = false): CacheTier {
   let tier: CacheTier = null;
   for (const line of raw.split(/\r?\n/)) {
     const s = line.trim();
@@ -246,14 +355,135 @@ export function lastCacheTier(raw: string): CacheTier {
       continue;
     }
     if (obj?.type !== "assistant" || !obj.message) continue;
-    if (obj.isSidechain) continue;
-    const c = obj.message.usage?.cache_creation;
-    if (!c) continue;
-    if ((c.ephemeral_1h_input_tokens || 0) > 0) tier = "1h";
-    else if ((c.ephemeral_5m_input_tokens || 0) > 0) tier = "5m";
+    if (obj.isSidechain && !includeSidechain) continue;
+    // Same validation the pricing path uses: a breakdown it rejects as corrupt
+    // must not be shown to the user as a confident tier either.
+    const t = tierOfWrite(obj.message.usage);
+    if (t) tier = t;
     // a write-less or breakdown-less turn leaves the previous tier unchanged
   }
   return tier;
+}
+
+/** What waiting cost this stream: cache writes spent reloading a context whose
+ *  cache had gone cold during a pause. */
+export interface IdleRebuild {
+  /** Raw cache-write tokens that landed on a turn following a pause > TTL. */
+  tokens: number;
+  /** The same tokens, split by the tier each reload write actually landed on,
+   *  so the cost is priced exactly like any other write (see rebuildCost). */
+  tokens1h: number;
+  tokens5m: number;
+  tokensUnknown: number;
+  /** ALL cache-write tokens of the counted stream(s). Denominator of the
+   *  "reloads are N% of what the agents wrote" threshold. */
+  cacheWrite: number;
+  /** How many streams contained at least one reload (0 or 1 for the lead). */
+  streams: number;
+}
+
+export function emptyRebuild(): IdleRebuild {
+  return { tokens: 0, tokens1h: 0, tokens5m: 0, tokensUnknown: 0, cacheWrite: 0, streams: 0 };
+}
+
+export function addRebuild(a: IdleRebuild, b: IdleRebuild): IdleRebuild {
+  return {
+    tokens: a.tokens + b.tokens,
+    tokens1h: a.tokens1h + b.tokens1h,
+    tokens5m: a.tokens5m + b.tokens5m,
+    tokensUnknown: a.tokensUnknown + b.tokensUnknown,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+    streams: a.streams + b.streams,
+  };
+}
+
+/** Reload tokens as a token-equivalent, using exactly the weights the session
+ *  headline uses — so the figure is a true subset of the number beside it. */
+export function rebuildCost(r: IdleRebuild, w: Weights): number {
+  return Math.round(
+    CACHE_WRITE_WEIGHT_1H * r.tokens1h + CACHE_WRITE_WEIGHT_5M * r.tokens5m + w.cacheWrite * r.tokensUnknown
+  );
+}
+
+/** Cache writes this stream spent rebuilding context after an idle gap longer
+ *  than the cache that was live at the time.
+ *
+ *  Why this signal is clean where a bare `cache_creation` spike is not: we never
+ *  look at a spike alone (it has at least eight non-idle causes — model switch,
+ *  compaction, an MCP change…). We look at a PAIR: a gap longer than the TTL of
+ *  the cache written just before it, immediately followed by a write.
+ *
+ *  Rules, all of them deliberate:
+ *  - The TTL is taken PER GAP, from the last write whose tier the transcript
+ *    states — not once for the whole file. A session can change tier mid-run
+ *    (passing the plan limit switches 1h → 5m), and judging an old 10-minute
+ *    gap by the tier the session ended on invents rebuilds in one direction and
+ *    loses them in the other.
+ *  - No stated tier yet → nothing is counted. A TTL is never assumed.
+ *  - Dedup by `message.id` first: one API response spans several jsonl lines and
+ *    repeats its usage block verbatim, which would inflate the figure ~2.5×.
+ *  - Turns are read in TRANSCRIPT ORDER, never re-sorted. A turn with no usable
+ *    timestamp, or one whose clock went backwards, is a BARRIER: its tokens
+ *    still count toward `cacheWrite`, but no gap is measured across it. Bridging
+ *    over such a turn would invent a pause that the skipped turn disproves. */
+export function idleRebuildOf(raw: string, includeSidechain = false): IdleRebuild {
+  const out = emptyRebuild();
+  /** Tier of the newest write we have seen — the cache a pause would kill. */
+  let liveTier: CacheTier = null;
+  /** Timestamp of the previous turn, or null when the chain is broken. */
+  let prevTs: number | null = null;
+  const seen = new Set<string>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (obj?.type !== "assistant" || !obj.message) continue;
+    if (obj.isSidechain && !includeSidechain) continue;
+    // Only real turns count. A placeholder with no `usage` (an interrupt, an
+    // error) is not a turn: letting it through would advance the clock and hide
+    // a genuine pause behind it, or plant a barrier where nothing happened.
+    const usage = obj.message.usage;
+    if (!usage) continue;
+    const id = obj.message.id || obj.requestId;
+    if (id) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    const split = cacheWriteSplit(usage);
+    const write = split.h1 + split.m5 + split.unknown;
+    out.cacheWrite += write;
+
+    const ts = Date.parse(obj.timestamp || "");
+    if (Number.isNaN(ts)) {
+      prevTs = null; // barrier: this turn happened, we just cannot place it
+    } else if (prevTs != null && ts <= prevTs) {
+      // The clock went backwards. Measure nothing across it — and nothing from
+      // it either: the NEXT gap would be measured against a timestamp we have
+      // just been shown to be untrustworthy.
+      prevTs = null;
+    } else {
+      const gapSec = prevTs == null ? 0 : (ts - prevTs) / 1000;
+      if (liveTier && prevTs != null && gapSec > CACHE_TTL_SECONDS[liveTier]) {
+        out.tokens += write;
+        out.tokens1h += split.h1;
+        out.tokens5m += split.m5;
+        out.tokensUnknown += split.unknown;
+      }
+      prevTs = ts;
+    }
+
+    const tier = tierOfWrite(usage);
+    if (tier) liveTier = tier;
+  }
+
+  if (out.tokens > 0) out.streams = 1;
+  return out;
 }
 
 export function addTotals(a: Totals, b: Totals): Totals {
@@ -263,6 +493,9 @@ export function addTotals(a: Totals, b: Totals): Totals {
     work: a.work + b.work,
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
+    cacheWrite1h: a.cacheWrite1h + b.cacheWrite1h,
+    cacheWrite5m: a.cacheWrite5m + b.cacheWrite5m,
+    cacheWriteUnknown: a.cacheWriteUnknown + b.cacheWriteUnknown,
   };
 }
 

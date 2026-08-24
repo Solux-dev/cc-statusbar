@@ -32,6 +32,7 @@ import {
   CacheView,
   ModelView,
   SubagentView,
+  RebuildView,
   choicesMarkdown,
 } from "./render";
 import { Weights, ContextInfo, QuotaWindow, ScopedQuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
@@ -257,15 +258,28 @@ const MODEL_LIMIT_RETRY_SEC = 60;
 const modelLimits = new Map<string, ModelWindowResult>();
 const limitInFlight = new Set<string>();
 
+/** A configured cache weight, or the default when the value is unusable.
+ *  Bounded at both ends: a negative weight would subtract from consumption, and
+ *  an absurd one (1e308) would overflow the total to Infinity. A cache write
+ *  costs 2× a fresh token, so 100 is already far past any honest setting. */
+const MAX_WEIGHT = 100;
+function safeWeight(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= MAX_WEIGHT ? v : fallback;
+}
+
 function cfg() {
   const c = vscode.workspace.getConfiguration("ccStatusbar");
   return {
     enabled: c.get<boolean>("enabled", true),
     refreshSeconds: c.get<number>("refreshSeconds", 10),
     alignment: c.get<string>("alignment", "right"),
+    // A weight is a price multiplier, so a negative or broken one is not a
+    // preference — it would subtract from consumption and could print a
+    // component larger than the total it belongs to. Clamp at read time; the
+    // settings schema states the same bound.
     weights: {
-      cacheRead: c.get<number>("cacheReadWeight", 0.1),
-      cacheWrite: c.get<number>("cacheWriteWeight", 1.25),
+      cacheRead: safeWeight(c.get<number>("cacheReadWeight", 0.1), 0.1),
+      cacheWrite: safeWeight(c.get<number>("cacheWriteWeight", 1.25), 1.25),
     } as Weights,
     quotaEnabled: c.get<boolean>("quota.enabled", true),
     minPollSeconds: c.get<number>("quota.minPollSeconds", 300),
@@ -728,7 +742,17 @@ async function tick() {
     return;
   }
 
-  const { totals, mtimeMs, context, cacheTier, cacheHitRatePct, leadTotals, subagents } = readSessionTotals(cwd);
+  const {
+    totals,
+    mtimeMs,
+    context,
+    cacheTier,
+    cacheHitRatePct,
+    leadTotals,
+    subagents,
+    leadRebuild,
+    subagentRebuild,
+  } = readSessionTotals(cwd);
   const nowSec = Math.floor(Date.now() / 1000);
   if (conf.provider === "auto") refreshCodexThread(nowSec, conf, cwd);
 
@@ -1050,6 +1074,12 @@ async function tick() {
 
   const modelView = buildModelView(context, cwd, conf.modelEnabled);
   const subagentViews = conf.subagentsEnabled ? buildSubagentViews(subagents, conf.weights) : [];
+  // The agents' reload figure lives in the delegated-work section, so it is
+  // suppressed with that section; the lead's own fragment in Details is not.
+  const rebuildView: RebuildView = {
+    lead: leadRebuild,
+    subagents: conf.subagentsEnabled ? subagentRebuild : undefined,
+  };
   const view = buildView(
     totals,
     conf.weights,
@@ -1059,7 +1089,8 @@ async function tick() {
     contextView,
     cacheView,
     modelView,
-    subagentViews
+    subagentViews,
+    rebuildView
   );
   item.text = view.text;
   const providerFooter =
@@ -1093,7 +1124,8 @@ async function tick() {
       cacheView,
       modelView,
       subagentViews,
-      effectiveTokens(leadTotals, conf.weights)
+      effectiveTokens(leadTotals, conf.weights),
+      rebuildView
     );
   }
 }

@@ -141,10 +141,15 @@ each section. In the hover's footer the **current** provider and language are
 marked `✓` and bold, the alternatives stay blue links, and a 🟢 means "this
 source has data right now" — a different thing from "this one is selected".
 
-The "with cache" figure is cache-weighted (cheap reads, costly writes:
-`work + 0.1·cache_read + 1.25·cache_write`), so it stays comparable across
-sessions. It is a token-equivalent, not a billing price. When the tariff line is
-unavailable, this same number is the bar's `eff` fallback.
+The "with cache" figure is cache-weighted (cheap reads, costly writes), so it
+stays comparable across sessions:
+`work + 0.1·cache_read + 2.0·write(1h) + 1.25·write(5m)`. A cache write is
+priced by **how long that cache is kept** — a 1-hour write really does cost 2×
+a fresh input token, a 5-minute write 1.25× — and the tier is read from the
+transcript, never assumed. Writes whose tier the transcript does not state use
+the `cacheWriteWeight` setting (1.25). It is a token-equivalent, not a billing
+price. When the tariff line is unavailable, this same number is the bar's `eff`
+fallback.
 
 ## Delegated work — where your tokens actually went
 
@@ -169,6 +174,18 @@ who actually chose to spend the tokens.
 This is not cosmetic: those tokens count against your quota, and nothing else
 shows where they went. If a research errand does not need an expensive model,
 name the model you want in the task itself.
+
+**What waiting costs.** While an agent sits idle its cache goes cold — 5 minutes
+for a subagent, 1 hour for the main session. After a long enough pause it loads
+its whole context again and pays for that as a new cache write. On the sessions
+measured here that is **over half** of everything subagents write to cache, so
+the section adds one line when it is worth your attention: *"of that, ≈ 6M went
+on reloading context after pauses — an agent's cache stays warm for 5 minutes"*.
+It appears only above a threshold (at least 1M tokens **and** 3% of the
+session), it is never coloured, and the status bar gains nothing — this is
+information, not a quota with consequences. The detection looks at a **pair**,
+never a spike on its own: a gap longer than *that stream's own* TTL, immediately
+followed by a write. A stream whose tier cannot be read is left out entirely.
 
 ## Provider: Auto / Claude Code / Codex
 
@@ -197,13 +214,13 @@ Open the panel (**“⤢ Open panel”**) for a small **Cache** section — two 
 lines, each with a hover footnote (ⓘ) that explains it in full, so you never have
 to look anything up:
 
-- **Tier — `1-hour` / `5-minute`.** Auto-detected from the session, never
-  assumed. It tells you how long your prompt cache stays warm while you're idle:
-  on a subscription within its plan limit it's **1-hour** (stepping away for up
-  to an hour stays cheap); an API key, paid usage past your plan limit, or
-  subagents run at **5-minute** (short breaks rebuild the cache and cost more).
-  Check it once to know how long a break you can take — you don't need to watch
-  it.
+- **Cache stays warm — `1 hour idle` / `5 minutes idle`.** Auto-detected from
+  the session, never assumed. It tells you how long your prompt cache survives
+  while you're idle: on a subscription within its plan limit it's **1 hour**
+  (stepping away for up to an hour stays cheap); an API key, paid usage past
+  your plan limit, or subagents run at **5 minutes** (short breaks rebuild the
+  cache and cost more). Check it once to know how long a break you can take —
+  you don't need to watch it.
 - **Input from cache — e.g. `95%`.** The share of your prompt served from cache
   (cheap) instead of re-read fresh; higher means the cache is being reused well.
   It's normal to start low and climb as a session warms up — a *descriptive* read
@@ -229,7 +246,8 @@ not available instead of guessed.
 | `work` / работа | raw input + output tokens (shown under Details) | сырые токены ввода + вывода (в блоке «Детали») |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
 | `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be; its dot is informational (🟢<40% · 🟡40–60% · 🔴60%+) and never tints the whole bar | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше; кружок информационный (🟢<40% · 🟡40–60% · 🔴60%+) и не красит весь бар |
-| cache tier / тир кэша | how long your prompt cache stays warm while idle — available for Claude Code; Codex does not expose this yet | сколько кэш живёт при простое — доступно для Claude Code; Codex пока это не отдаёт |
+| cache stays warm / кэш держится | how long your prompt cache survives while idle (1 hour or 5 minutes) — available for Claude Code; Codex does not expose this yet | сколько кэш живёт при простое (1 час или 5 минут) — доступно для Claude Code; Codex пока это не отдаёт |
+| reloaded after pauses / повторная загрузка после пауз | tokens spent loading a context again because its cache went cold during a wait — descriptive, never a grade | токены, ушедшие на повторную загрузку контекста, чей кэш остыл за время паузы — описание, не оценка |
 | input from cache / ввод из кэша | share of the prompt served from cache (cheap) vs re-read fresh — higher = better reuse; descriptive, not a score | доля промпта из кэша (дёшево) против повторного чтения — выше = лучше переиспользование; описание, не оценка |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |
 
@@ -438,7 +456,7 @@ the network sources keep the limits current.
 | `refreshSeconds` | `10` | Redraw interval |
 | `alignment` | `right` | Status-bar side |
 | `cacheReadWeight` | `0.1` | weight for cache read in the cache-weighted cost |
-| `cacheWriteWeight` | `1.25` | weight for cache write in the cache-weighted cost |
+| `cacheWriteWeight` | `1.25` | weight for a cache write whose TTL tier the transcript does **not** state; a stated tier is priced at the real tariff (1-hour ×2.0, 5-minute ×1.25) |
 | `quota.enabled` | `true` | Fetch real quota — 5h/7d + per-model weekly (free in the steady state) |
 | `quota.minPollSeconds` | `300` | Min seconds between quota calls |
 | `credentialsPath` | `""` | Override credentials file location |
