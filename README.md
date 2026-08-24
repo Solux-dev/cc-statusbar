@@ -1,6 +1,6 @@
 # Claude/Codex Usage — Quota & Context Statusbar
 
-[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/solux-dev.cc-statusbar?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
+[![VS Marketplace](https://img.shields.io/badge/VS%20Marketplace-cc--statusbar-007ACC?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
 [![Open VSX](https://img.shields.io/open-vsx/v/solux-dev/cc-statusbar?label=Open%20VSX)](https://open-vsx.org/extension/solux-dev/cc-statusbar)
 
 A VS Code status-bar item for **Claude Code** and **Codex** usage: real
@@ -274,7 +274,9 @@ _По умолчанию язык берётся из языка редакто�
      isolated in `src/quota.ts` + `src/usage.ts`; on any failure the sources
      below take over unchanged.
   2. **Passive local bridge — zero network, zero token cost.** The companion
-     `statusline.py` mirrors the `rate_limits` that Claude Code already hands to
+     [`statusline.py`](https://github.com/Solux-dev/cc-statusbar/blob/master/statusline.py) (ships in this repo, optional — see
+     [Optional: the local quota bridge](#optional-the-local-quota-bridge-terminal-sessions))
+     mirrors the `rate_limits` that Claude Code already hands to
      its **statusLine hook** into `~/.claude/.cc-statusbar-quota.json`; the
      extension just reads that file. This is the **same real server data Claude
      Code shows in its own usage view**, obtained without any request of our own
@@ -390,6 +392,42 @@ code --install-extension cc-statusbar-<version>.vsix
 
 Reload VS Code. The item appears on the right of the status bar.
 
+## Optional: the local quota bridge (terminal sessions)
+
+**You do not need this.** Quota already works out of the box over the network.
+This adds a *zero-request* path that keeps working on links too weak for a
+network call to complete — useful on phone tethering or a flaky connection.
+
+Claude Code hands its **statusLine hook** the real 5h/7d limits on stdin, read
+from the headers of its own ongoing traffic. The extension cannot see that
+stdin, so [`statusline.py`](https://github.com/Solux-dev/cc-statusbar/blob/master/statusline.py) mirrors those limits into
+`~/.claude/.cc-statusbar-quota.json`, which the extension reads locally.
+
+1. Copy [`statusline.py`](https://github.com/Solux-dev/cc-statusbar/blob/master/statusline.py) to `~/.claude/statusline.py`.
+2. Point Claude Code's statusLine at it in `~/.claude/settings.json`:
+
+   ```json
+   {
+     "statusLine": {
+       "type": "command",
+       "command": "python ~/.claude/statusline.py"
+     }
+   }
+   ```
+
+3. Start a **terminal** `claude` session and send one message. The file appears
+   after the first reply, and the extension picks it up on its next tick.
+
+Requires Python 3.8+, no third-party packages, works on Windows, macOS and
+Linux. The script also prints a compact status line of its own (model, context
+fill, both quota windows). **Already have a statusLine script?** Keep it — copy
+just `dump_quota_bridge()` and its call at the end of `main()` into yours; the
+bridge is independent of whatever your script prints.
+
+**Terminal sessions only.** The VS Code / Cursor integration runs Claude Code
+*without* a status line, so an IDE-only session never triggers the script; there
+the network sources keep the limits current.
+
 ## Settings (`ccStatusbar.*`)
 
 | Key | Default | Meaning |
@@ -413,19 +451,28 @@ Reload VS Code. The item appears on the right of the status bar.
 
 The plugin has two parts with different reliability:
 
-- **Local metrics** (`work` / `cost` / `cache` / savings) are read from the
-  local transcript files. They **always work** and depend on nothing external.
-- **The real 5h/7d quota** comes from an **undocumented** Anthropic channel (the
-  API response headers, read with your local OAuth token). If Anthropic changes
-  that mechanism, **only the tariff line stops showing** — the plugin does not
-  break: all local metrics keep working and the tariff is simply hidden with a
-  "temporarily unavailable" note. Because only `src/quota.ts` touches that
-  channel, a fix is a small, isolated patch.
-- **The context-window %** depends on the same external channel: it reads the
-  model's window limit from the Anthropic Models API using your local OAuth
-  token (cached 24h). If that channel changes, **only the context line hides**
-  (the % is never guessed) — local cost/cache metrics are unaffected. The fix is
-  likewise isolated to `src/quota.ts`.
+- **Local metrics** (`work` / token-equivalent / `cache` / savings) are read from
+  the local transcript files. They **always work** and depend on nothing
+  external.
+- **The real 5h/7d quota** comes from the **four independent sources** listed
+  above: the account usage payload, the passive statusLine bridge, the header
+  poll, and Claude Code's own on-disk copy. Three of them are **undocumented**
+  Anthropic surfaces that can change without notice — but they fail
+  independently and the freshest valid reading wins, so one breaking is
+  invisible to you. Only when **all four** fail does the tariff stop being live,
+  and even then the plugin does not break: local metrics keep working, the bar
+  says `$(cloud-offline) quota offline`, and the hover shows the last known
+  reading **with its age** — an old number is never presented as current. The
+  quota code is isolated in `src/quota.ts`, `src/usage.ts` and
+  `src/localQuota.ts`, so a fix is a small, contained patch.
+- **The per-model weekly rows** (e.g. `Fable (7d)`) come from the usage payload
+  only — no other source carries them. If that route changes, those rows
+  disappear while 5h/7d stay live on the remaining sources.
+- **The context-window %** depends on one external channel: the model's window
+  limit read from the Anthropic Models API with your local OAuth token (cached
+  24h). If that channel changes, **only the context line hides** (the % is never
+  guessed) — local metrics are unaffected. The fix is likewise isolated to
+  `src/quota.ts`.
 - **Codex support** depends on the local Codex app-server and local Codex session
   history. If app-server is unavailable, the Codex tariff can temporarily show as
   unavailable; if token counters are not present yet, context/cache appear after
