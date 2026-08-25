@@ -10,7 +10,10 @@ rule). Extends [`cache-tier-spec.md`](cache-tier-spec.md) — read that first.
 
 Show **what waiting costs**: when an agent sits idle longer than its cache
 lives, it reloads its whole context and pays for it again — today that spend is
-invisible, and it is over half of everything our subagents write to cache.
+invisible, and it is 48% of everything our subagents write to cache — 54% once
+each agent's unavoidable first load is set aside. (Re-measured round 16 over 505
+agent logs: 114.4M reload tokens against 236.8M written in total. The original
+"over half" used the narrower denominator without saying so.)
 
 ## Why this, now — the measurement
 
@@ -40,6 +43,12 @@ Two more numbers that decide the guidance we give:
 So keeping an agent open across a long pause is **not** the cheap option it
 looks like. The real lever is the length of the pause, not whether the agent is
 reused.
+
+**Correction, round 16.** This holds only where the pause is idle time. The
+signal cannot tell an idle pause from the agent's own long command, and 46% of
+the tokens it counts here sit in the second kind — where closing the agent
+changes nothing, because the build still takes the same ten minutes. Every
+surface must therefore name both, and attach the advice to the first only.
 
 ## Why this signal is clean (and the old one was not)
 
@@ -88,16 +97,16 @@ thing without the word.
 ```
 Delegated work (subagents)
   12 subagents · ≈ 40M tok — 48% of this session's consumption
-  of that, ≈ 6M went on reloading context after pauses — an agent's cache
-  stays warm for 5 minutes
+  of that, ≈ 6M went on reloading context after pauses (15% of what the agents
+  spent) — an agent's cache usually stays warm for 5 minutes
   [group rows, agent list — unchanged]
   A pause past the agent's cache lifetime… …existing note…
 ```
 ```
 Делегированная работа (субагенты)
   12 субагентов · ≈ 40M ток — 48% расхода сессии
-  из них ≈ 6M ушло на повторную загрузку контекста после пауз — кэш агента
-  держится 5 минут
+  из них ≈ 6M ушло на повторную загрузку контекста после пауз (15% расхода
+  агентов) — кэш агента обычно держится 5 минут
   [строки по моделям, список агентов — без изменений]
   Пауза дольше срока жизни кэша… …примечание…
 ```
@@ -108,6 +117,11 @@ only above the threshold; below it the section is exactly as today.
 
 The guidance sentence is appended to the section's existing closing note — no
 new paragraph.
+
+**Superseded, round 16.** It is now its own muted line, because the agent list
+became collapsible: the closing note it used to lead sits inside the collapsed
+block and is invisible by default, so an advice sentence appended to it would
+disappear with the list. The actionable half has to survive the fold.
 
 ### Panel — the lead's own idle time
 
@@ -141,9 +155,10 @@ Every string in this feature obeys all five:
 3. **State only the cause the data carries, and never a verdict.** The
    measurement is a gap longer than the cache's life — it does not say what
    filled the gap. Measured on 503 agent logs here, 46% of the tokens counted
-   this way were spent inside the agent's own `Bash` call (a test run, a build),
-   not with the agent left idle, so a single named cause would be wrong about
-   half the time. Name both, mark which one the advice applies to. Never "you
+   this way came from gaps whose longest internal silence ran from the agent's
+   own `Bash` `tool_use` to its `tool_result` (a test run, a build) rather than
+   from an agent sitting idle, so a single named cause would be wrong about half
+   the time. Name both, mark which one the advice applies to. Never "you
    wasted", never a score, never a grade.
 4. **No jargon without its plain-words twin in the same line.** The `ⓘ`
    footnote carries the full explanation; the visible line must be readable

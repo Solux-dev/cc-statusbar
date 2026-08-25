@@ -203,8 +203,8 @@ Every agent row ends with **what waiting cost that agent**: `idle 31% (≈ 800k)
 — the share of its *own* spend that went on loading its context again after a
 pause, and the tokens behind that share. The percentage says how bad, the tokens
 say whether it is worth acting on: 31% of a small agent is a rounding error, 31%
-of a large one is a reason to close the agent instead of leaving it open through
-a long review. `0%` is a real answer — no waiting cost was measured for that
+of a large one is worth looking into — and what to do about it depends on what
+the pause was, which this figure does not claim to know. `0%` is a real answer — no waiting cost was measured for that
 agent: every pause it took was judged, and none of them priced to anything (an
 agent that never paused at all, a single turn, is a truthful `0%` too). The row
 shows `—` when a **pause** could not be judged and nothing else priced to
@@ -221,8 +221,9 @@ number and 1% showed the dash. A figure above zero means one of that agent's
 pauses outlasted its cache. It does **not** say what filled the pause: the agent
 may have been left open while another one worked, or its own command may have
 run long — a test suite, a build. On the 503 agent logs measured here, 46% of the
-tokens counted this way were spent inside the agent's own `Bash` call, so naming
-one cause would be naming the wrong one about half the time.
+tokens counted this way came from pauses whose longest silence ran from the
+agent's own `Bash` call to its result, so naming one cause would be naming the
+wrong one about half the time.
 
 Agents spawned by *another* agent rather than by the Lead are marked `depth N`
 (real and common — nesting reaches depth 5 in practice), so the breakdown says
@@ -235,8 +236,9 @@ name the model you want in the task itself.
 **What waiting costs.** While an agent sits idle its cache goes cold — usually 5
 minutes for a subagent, an hour for the main session, though each stream's own
 lifetime is read from its transcript rather than assumed. After a long enough pause it loads
-its whole context again and pays for that as a new cache write. On the sessions
-measured here that is **over half** of everything subagents write to cache, so
+its whole context again and pays for that as a new cache write. Across the 505
+agent logs measured here that is **48%** of everything subagents write to cache
+— and **54%** once each agent's unavoidable first load is set aside — so
 the section adds one line when it is worth your attention: *"of that, ≈ 6M went
 on reloading context after pauses — an agent's cache usually stays warm for 5
 minutes"*.
@@ -435,13 +437,16 @@ _По умолчанию язык берётся из языка редакто�
 - **Context and cached input** — read from Codex token counters in local Codex
   history (`~/.codex/sessions/...jsonl`, `token_count`) and from app-server
   token-usage notifications when available.
-- **Not guessed** — Codex exposes no cache tier and no money price. Its
-  cache-write counter (`cache_write_input_tokens`) is a *breakdown* of its input
-  count, not an extra beside it, so those tokens are already inside the
-  token-equivalent and are never added a second time; Codex does not say how far
-  they overlap its cached-input count, so they are not repriced either, and
-  `Details` shows the figure exactly as Codex reports it. The extension shows
-  what is missing as unavailable and labels the top number as
+- **Priced once, where OpenAI says it belongs** — the cache-write counter
+  (`cache_write_input_tokens`) is a *breakdown* of the input count, not an extra
+  beside it. OpenAI documents the split as
+  `ordinary = input − cached − cache_write`, so the extension prices each of the
+  three buckets once: ordinary input at 1×, cached reads at your read weight,
+  writes at your write weight. `Details` shows the figure exactly as Codex
+  reports it.
+- **Not guessed** — Codex exposes no cache tier and no money price, so a write
+  can only be priced by the unstated-tier setting, and the tier line is shown as
+  unavailable rather than invented. The extension labels the top number as
   **token-equivalent**, not billing.
 
 ## Privacy / security

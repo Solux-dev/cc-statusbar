@@ -3423,6 +3423,37 @@ test("the lead's floored reload figure reads the same in Russian", () => {
   assert.match(ru.tooltip, /повторные загрузки после простоя ≥ 3\.7M/);
 });
 
+test("the ≥ carries its own definition where nothing else on the surface gives one", () => {
+  // Round 16. `panelAtLeastNote` hangs off the delegated section, which can be
+  // absent entirely — the LEAD's own reloads do not depend on any agent being
+  // listed, and the hover has no ⓘ at all. A marker with no definition in view
+  // is a figure the reader cannot interpret.
+  const partial = REB({ tokens: 3_750_000, tokens1h: 3_750_000, cacheWrite: 9_000_000, streams: 1, unjudged: 1 });
+  const en = buildView(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, undefined, { lead: partial }
+  );
+  assert.match(en.tooltip, /the real figure can be higher, never lower/);
+  const enPanel = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, undefined, undefined, { lead: partial }
+  );
+  assert.match(enPanel, /the real figure can be higher, never lower/);
+  const ruPanel = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, undefined, undefined, { lead: partial }
+  );
+  assert.match(ruPanel, /настоящее число может быть больше, но не меньше/);
+
+  // A complete measurement prints no marker, so it needs no explanation either.
+  const whole = REB({ tokens: 3_750_000, tokens1h: 3_750_000, cacheWrite: 9_000_000, streams: 1 });
+  const clean = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, undefined, undefined, { lead: whole }
+  );
+  assert.ok(!/≥ = measured from part of the log/.test(clean));
+});
+
 // ---------------------------------------------------------------------------
 // Round 6 — the fifth review. Two of these are the same lesson twice: a rule
 // applied to most of the places it belongs is not applied.
@@ -3567,7 +3598,7 @@ test("the idle legend blames a cold cache only where a cost was measured", () =>
   assert.ok(!/И в том, и в другом случае/.test(ru));
 });
 
-test("the idle legend states a pause, never what the log does not record filling it", () => {
+test("the idle legend states a pause, never what the measurement did not look at", () => {
   // Round 15. `idleRebuildOf` compares two timestamps against the live cache
   // lifetime and never reads what lies between them, so "its cache went cold
   // while it was left open" asserted a cause the measurement cannot see — and
@@ -3577,14 +3608,18 @@ test("the idle legend states a pause, never what the log does not record filling
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
   );
-  assert.match(en, /What filled that pause is not in the log/);
-  assert.match(en, /its own command may have run long/);
+  // Round 16 sharpened this: the tool call IS in the transcript, so "not in the
+  // log" was itself a claim the data contradicts. What is true is narrower —
+  // this measurement never looks.
+  assert.match(en, /This measurement does not look at what filled the pause/);
+  assert.ok(!/What filled that pause is not in the log/.test(en));
+  assert.match(en, /its own\s+command may have run long/);
   assert.ok(!/is not the agent&#39;s doing: its cache went cold while it was left open/.test(en));
   const ru = buildPanelHtml(
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
   );
-  assert.match(ru, /Чем была занята пауза, в журнале не написано/);
+  assert.match(ru, /Чем была занята пауза, этот замер не смотрит/);
   assert.match(ru, /его собственная\s+команда/);
   assert.ok(!/не вина агента: его кэш остыл/.test(ru));
 });
@@ -3786,12 +3821,10 @@ test("the Russian UI has no English left in it where a fact is missing", () => {
 test("a cache-write count Codex states is shown, not silently dropped", () => {
   // Round 14. The field exists in Codex's protocol (`cache_write_input_tokens`)
   // and is 0 in all 109,746 turns measured on this machine — but a stated
-  // non-zero must not vanish from a panel about token cost. It is not folded
-  // into the token-equivalent either — but round 15 corrected the reason: Codex
-  // fills the field from `input_tokens_details.cache_write_tokens`, a breakdown
-  // of `input_tokens`, so those tokens are ALREADY inside the figure and adding
-  // them would double-count. What is genuinely unstated is the overlap with
-  // `cached_input_tokens`, which is why they are not repriced.
+  // non-zero must not vanish from a panel about token cost. Round 16 settled how
+  // it enters the figure: OpenAI documents `input_tokens_details` as a breakdown
+  // of `input_tokens` with `ordinary = input − cached − cache_write`, so a write
+  // is priced ONCE, at the write weight, and never as ordinary fresh input.
   const now = 1000;
   const quota = { state: "ok" as const, fiveH: null, sevenD: null };
   const stated = {
@@ -3805,26 +3838,27 @@ test("a cache-write count Codex states is shown, not silently dropped", () => {
   };
   const en = buildCodexPanelHtml(quota, now, "en", stated);
   assert.match(en, /cache: read 40k \/ write 12k/);
-  assert.match(en, /Codex also reports 12k tok written to cache/);
+  assert.match(en, /12k tok were written to cache/);
   const ru = buildCodexPanelHtml(quota, now, "ru", stated);
   assert.match(ru, /кэш: чтение 40k \/ запись 12k/);
-  assert.match(ru, /сообщает ещё 12k ток\., записанных в кэш/);
+  assert.match(ru, /Из ввода выше 12k ток\. записаны в кэш/);
 
   // A payload that states nothing still reads "n/a" — and a stated zero prints
   // as a zero, because "not stated" and "stated as none" are different answers.
   const silent = { ...stated, usage: { ...stated.usage, cacheWriteInputTokens: null } };
   assert.match(buildCodexPanelHtml(quota, now, "en", silent), /write n\/a/);
-  assert.ok(!/also reports/.test(buildCodexPanelHtml(quota, now, "en", silent)));
+  assert.ok(!/were written to cache/.test(buildCodexPanelHtml(quota, now, "en", silent)));
   const zero = { ...stated, usage: { ...stated.usage, cacheWriteInputTokens: 0 } };
   assert.match(buildCodexPanelHtml(quota, now, "en", zero), /cache: read 40k \/ write 0/);
-  assert.ok(!/also reports/.test(buildCodexPanelHtml(quota, now, "en", zero)));
+  assert.ok(!/were written to cache/.test(buildCodexPanelHtml(quota, now, "en", zero)));
 });
 
-test("the Codex ⓘ gives the true reason the write count is not added, not a gap in the protocol", () => {
-  // Round 15. Codex DOES fix the relationship — the field comes from
-  // `input_tokens_details.cache_write_tokens`, and its own parse test carries
-  // input 100 / cached 40 / write 60 / output 10 / total 110, where the write
-  // moves no total. Saying "the protocol does not state whether…" was false.
+test("a Codex cache write is priced once, at the write weight, never as fresh input", () => {
+  // Round 16. OpenAI documents `input_tokens_details` as a BREAKDOWN of
+  // `input_tokens` — "ordinaryInputTokens = inputTokens - cachedTokens -
+  // cacheWriteTokens", reads at 0.1x, writes at 1.25x. Pricing a write at 1x
+  // inside fresh input (what rounds 14-15 did) understated the figure; adding it
+  // on top of the input count would have counted it twice.
   const now = 1000;
   const quota = { state: "ok" as const, fiveH: null, sevenD: null };
   const stated = {
@@ -3836,26 +3870,58 @@ test("the Codex ⓘ gives the true reason the write count is not added, not a ga
       cacheWriteInputTokens: 12_000,
     },
   };
+  // 48k ordinary + 5k output + 40k read x 0.1 + 12k write x 1.25 = 72k.
+  // The three input buckets sum to exactly the 100k Codex reported.
   const en = buildCodexPanelHtml(quota, now, "en", stated);
-  assert.match(en, /a breakdown of its input count/);
-  assert.match(en, /already inside the figure above/);
+  assert.match(en, /≈ 72k/);
+  assert.ok(!/≈ 69k/.test(en), "…the old figure, which priced the write as ordinary input");
+  assert.match(en, /counted once/);
   assert.ok(!/does not state whether those tokens are already inside/.test(en));
   const ru = buildCodexPanelHtml(quota, now, "ru", stated);
-  assert.match(ru, /часть его счётчика ввода/);
+  assert.match(ru, /посчитаны один раз/);
   assert.ok(!/не сказано, входят ли эти/.test(ru));
 
-  // And the arithmetic did NOT move: the write is inside the input count, so
-  // the token-equivalent is what it was before this text was corrected.
-  // 60k fresh + 5k output + 40k read × 0.1 = 69k.
-  assert.match(en, /≈ 69k/);
+  // A breakdown bigger than the whole never produces a negative bucket: the
+  // write is clamped to what the reads left, so the parts still sum to the input.
+  const overlapping = {
+    ...stated,
+    usage: { ...stated.usage, inputTokens: 4583, cachedInputTokens: 3945, cacheWriteInputTokens: 4580, outputTokens: 0 },
+  };
+  // 0 ordinary + 3945 x 0.1 + 638 x 1.25 = 1192.
+  assert.match(buildCodexPanelHtml(quota, now, "en", overlapping), /≈ 1\.2k/);
 });
 
-test("only the Claude panel promises the comparison may still turn", () => {
-  // Round 15. On the Claude path a with-cache figure that is currently smaller
-  // can lose that lead to a later write, so "so far" is honest. On the Codex
-  // path the gap is exactly cachedInput × (cacheReadWeight − 1) and there is no
-  // write side to earn anything back, so nothing can turn while the setting
-  // stands — and the Codex hover never carried the hedge in the first place.
+test("the warm-up hint is Codex's own, because Codex has no cache tiers to name", () => {
+  // Round 16. Now that writes are priced here, the Codex panel can reach the
+  // warm-up and both-sides states for the first time. Claude's twins of those
+  // two sentences name "1-hour x2.0, 5-minute x1.25" — tiers Codex never states.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const warming = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 100_000, lastTokens: 100_000,
+      inputTokens: 100_000, cachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 100_000,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", warming);
+  assert.match(en, /Codex states no cache lifetime/);
+  assert.ok(!/1-hour ×2\.0/.test(en), "…Claude's tiers, which Codex does not have");
+  // And it is no longer told that nothing was read, which would contradict the
+  // 125k against 100k printed right under it.
+  assert.ok(!/Nothing has been read from cache in this session yet/.test(en));
+  const ru = buildCodexPanelHtml(quota, now, "ru", warming);
+  assert.match(ru, /Срок жизни кэша Codex не сообщает/);
+  assert.ok(!/часовая ×2\.0/.test(ru));
+});
+
+test("the 'so far' is dropped wherever no weight can narrow the gap", () => {
+  // Round 16. The gap is the sum of `bucket x (weight - 1)`, so only a bucket
+  // priced BELOW a fresh token can ever close it. This is arithmetic, not a
+  // property of one provider: with every weight at or above 1 the direction is
+  // fixed on the Claude panel too.
   const now = 1000;
   const quota = { state: "ok" as const, fiveH: null, sevenD: null };
   const codex = {
@@ -3867,21 +3933,37 @@ test("only the Claude panel promises the comparison may still turn", () => {
       outputTokens: 5000, reasoningOutputTokens: 0,
     },
   };
-  const en = buildCodexPanelHtml(quota, now, "en", codex);
-  assert.match(en, /× less/);
-  assert.ok(!/less, so far/.test(en));
-  const ru = buildCodexPanelHtml(quota, now, "ru", codex);
-  assert.match(ru, /в ~\d[\d.]*× меньше/);
-  assert.ok(!/пока в ~/.test(ru));
-
-  // The Claude panel keeps it: a write it has not yet earned back can still
-  // reverse the direction there.
-  const claude = {
-    input: 0, output: 0, work: 0,
-    cacheRead: 100_000, cacheWrite: 0,
-    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  const locked = buildCodexPanelHtml(quota, now, "en", codex);
+  assert.match(locked, /× less/);
+  assert.ok(!/less, so far/.test(locked));
+  assert.ok(!/пока в ~/.test(buildCodexPanelHtml(quota, now, "ru", codex)));
+  // At the default read weight a later read still narrows it, so the hedge is
+  // honest again — on the same panel. (A write-only session, so the with-cache
+  // figure is the larger one and the "less" branch is the one on screen.)
+  const open = {
+    source: "stdio" as const,
+    weights: { cacheRead: 0.1, cacheWrite: 1.25 },
+    usage: {
+      totalTokens: 100_000, lastTokens: 100_000,
+      inputTokens: 100_000, cachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 100_000,
+    },
   };
-  assert.match(buildPanelHtml(claude, { cacheRead: 2, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "en"), /less, so far/);
+  assert.match(buildCodexPanelHtml(quota, now, "en", open), /less, so far/);
+
+  // Claude: a write not yet earned back at the default read weight can still
+  // reverse…
+  const warmup = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 0, cacheWrite: 100_000,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 100_000,
+  };
+  assert.match(buildPanelHtml(warmup, W, QUOTA_OFF, 1000, "en"), /less, so far/);
+  // …and with every weight at or above 1 it cannot, so the same panel drops it.
+  assert.ok(
+    !/less, so far/.test(buildPanelHtml(warmup, { cacheRead: 2, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "en"))
+  );
 });
 
 test("an arithmetic zero is a zero, not a premium of 0.0000000000146 tokens", () => {

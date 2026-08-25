@@ -47,7 +47,16 @@ export interface Messages {
   codexTitle: string;
   codexQuotaHeader: string;
   codexAppServerLine: (source: string, plan: string | null, userAgent: string | null) => string;
-  codexCostCompact: (withCache: string, noCache: string, mult: string | null, dir: CostDirection) => string;
+  /** Same `canReverse` rule as `panelCostCompare`. The hover names no CAUSE at
+   *  all — it has no room for the full explanation, and now that Codex writes
+   *  are priced there are two possible causes, so naming one would be a guess. */
+  codexCostCompact: (
+    withCache: string,
+    noCache: string,
+    mult: string | null,
+    dir: CostDirection,
+    canReverse?: boolean
+  ) => string;
   codexUsageWaitingCompact: string;
   codexContextShortUnavailable: string;
   /** Why a Codex context percentage is missing: the model states no window.
@@ -63,11 +72,18 @@ export interface Messages {
    *  relates to its input count, so "nothing has been written to cache" is a
    *  fact this provider does not give us. */
   codexPanelNoCacheReadHint: string;
+  /** Codex twins of the two Claude hints that name cache TIERS. Codex states no
+   *  cache lifetime, so a write here can only be priced by the unstated-tier
+   *  setting; repeating Claude's "1-hour ×2.0, 5-minute ×1.25" would name tiers
+   *  this provider does not have. The tier-free hints (`panelCostWeightHint`,
+   *  `panelCostEvenHint`) are shared, not duplicated. */
+  codexPanelWarmupHint: string;
+  codexPanelBothHint: string;
   /** Shown when Codex DOES state a non-zero cache-write count. Its protocol
    *  documents no relationship between that counter and `input_tokens`, so the
    *  figure above cannot absorb it without guessing — and a silent omission of
    *  a number the provider states is exactly the wrong way to be wrong. */
-  codexPanelWriteNotCountedHint: (tokens: string) => string;
+  codexPanelWritePricedHint: (tokens: string) => string;
   codexLowerMult: (mult: string) => string;
   codexPanelUsageWaiting: string;
   codexPanelTokenCostNote: string;
@@ -122,6 +138,12 @@ export interface Messages {
   panelSubagentsRebuild: (cost: string, share: string) => string;
   /** Explains the ≥ marker, shown only when something actually carries it. */
   panelAtLeastNote: string;
+  /** The same rule in one clause, for the two places the `≥` can appear without
+   *  the delegated section's ⓘ beside it: the panel's `Details` line (the LEAD's
+   *  own reloads, which do not depend on any agent being listed) and the hover
+   *  fragment. A marker with no definition in view is a number the reader
+   *  cannot interpret. */
+  atLeastShort: string;
   /** Hover footnote (ⓘ) for that line. The visible line must read without it. */
   panelSubagentsRebuildHint: string;
   /** Appended to the closing note when reloads dominate what the agents wrote.
@@ -208,14 +230,14 @@ export interface Messages {
   /** The comparison, as a VISIBLE line under the headline number: what the same
    *  session would have cost with nothing reused. It is the one figure that says
    *  what the cache is doing for you, so it is not left to a hover. */
-  /** `lessCanReverse` is what the "so far" hangs on. On the Claude path a
-   *  with-cache figure that is currently the smaller one can still lose that
-   *  lead to a later write, so the hedge is honest. On the Codex path the gap
-   *  is exactly `cachedInput × (cacheReadWeight − 1)` — there is no write side
-   *  to earn anything back — so while the setting stands the direction cannot
-   *  reverse, and promising that it might would be a statement the arithmetic
-   *  forbids. */
-  panelCostCompare: (noCache: string, mult: string | null, dir: CostDirection, lessCanReverse?: boolean) => string;
+  /** `canReverse` is what every "so far" on this line hangs on. The gap between
+   *  the two figures is `Σ bucket × (weight − 1)`, so it can only narrow if some
+   *  bucket is priced below a fresh token. Where no weight is below 1 — a read
+   *  weight above 1 with writes at 1.25×, say — the direction is fixed while the
+   *  settings stand, and hedging it promises a turn the arithmetic forbids. It
+   *  governs the `same` branch as well as `less`: two figures that are equal
+   *  because nothing can separate them are not "the same *so far*". */
+  panelCostCompare: (noCache: string, mult: string | null, dir: CostDirection, canReverse?: boolean) => string;
   /** Replaces the "cache saved" footnote while the with-cache figure is NOT the
    *  smaller one. Two texts, because there are two different causes and naming
    *  the wrong one invents a fact: `Warmup` when this session has written to
@@ -283,15 +305,15 @@ const EN: Messages = {
   codexQuotaHeader: "**Subscription quota (real, from server):**",
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · plan ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
-  codexCostCompact: (withCache, noCache, mult, dir) =>
+  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
     (dir === "same"
-      ? " (about the same so far)"
+      ? ` (about the same${canReverse ? " so far" : ""})`
       : !mult
       ? ""
       : dir === "more"
       ? ` (~${mult}× lower)`
-      : ` (~${mult}× higher — cached input is priced above fresh input here)`),
+      : ` (~${mult}× higher${canReverse ? " so far" : ""})`),
   codexUsageWaitingCompact: "token-equivalent with cache: will appear after the next Codex response",
   codexContextShortUnavailable: "$(info) ctx n/a",
   codexContextNoWindow: "model context window unavailable",
@@ -304,11 +326,21 @@ const EN: Messages = {
   codexPanelNoCacheReadHint:
     "Nothing has been read from cache in this session yet, so the two figures are the same number. " +
     "Codex keeps its own counter for cache writes, so this says nothing about what it may already have stored.",
-  codexPanelWriteNotCountedHint: (tokens) =>
-    `Codex also reports ${tokens} tok written to cache. That counter is a breakdown of its input count, ` +
-    `not an extra beside it, so those tokens are already inside the figure above and are not added a ` +
-    `second time. What Codex does not state is how far they overlap its cached-input count, so they are ` +
-    `not repriced either — the Details line shows them exactly as Codex stated them.`,
+  codexPanelWarmupHint:
+    "The cache has not earned back what it cost yet. Codex states no cache lifetime, so a write is " +
+    "priced by your `ccStatusbar.cacheWriteWeight` (default 1.25) — above a fresh input token. While " +
+    "that premium is bigger than what the reads save, the with-cache figure is the larger of the two. " +
+    "At the default read weight (0.1) each later read on the same cache narrows the gap.",
+  codexPanelBothHint:
+    "Both sides of the cache add to this figure here. A write is charged above the tokens it holds " +
+    "(Codex states no cache lifetime, so yours are priced by `ccStatusbar.cacheWriteWeight`), and reads " +
+    "add to it too, because your `ccStatusbar.cacheReadWeight` is above 1 — so reuse saves nothing " +
+    "against reading the same input fresh. At its default (0.1) it would.",
+  codexPanelWritePricedHint: (tokens) =>
+    `Of the input above, ${tokens} tok were written to cache. OpenAI documents that counter as a part ` +
+    `of the input count rather than an extra beside it, so those tokens are counted once — at the write ` +
+    `weight instead of as ordinary fresh input, which is dearer than a fresh token and is what a warm-up ` +
+    `costs. The Details line shows the figure exactly as Codex stated it.`,
   codexLowerMult: (mult) => `(~${mult}× lower)`,
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
   codexPanelTokenCostNote:
@@ -388,12 +420,13 @@ const EN: Messages = {
     "0% means no waiting cost was measured for it — every pause it took was judged, and none of them " +
     "priced to anything; " +
     "a dash means the log did not allow the measurement, which is a different thing from zero. " +
-    "A figure above zero means one of its pauses outlasted its cache. What filled that pause is not in " +
-    "the log: the agent may have been left open while another one worked, or its own command may have " +
-    "run long — a test run, a build.",
+    "A figure above zero means one of its pauses outlasted its cache. This measurement does not look at " +
+    "what filled the pause: the agent may have been left open while another one worked, or its own " +
+    "command may have run long — a test run, a build.",
   panelAtLeastNote:
     "≥ marks a figure measured from part of the log only: some pauses could not be judged, so the real " +
     "number can be higher, never lower.",
+  atLeastShort: "≥ = measured from part of the log; the real figure can be higher, never lower",
   detailsRebuild: (tokens) => `after-idle reloads ${tokens}`,
   title: "**Claude Code — session usage**",
   costCompact: (withCache, noCache, mult, dir) =>
@@ -449,14 +482,14 @@ const EN: Messages = {
   tok: "tok",
   panelCostLabel: "Token-equivalent with cache",
   panelSavedLabel: "Cache saved",
-  panelCostCompare: (noCache, mult, dir, lessCanReverse = true) =>
+  panelCostCompare: (noCache, mult, dir, canReverse = true) =>
     dir === "same"
-      ? `without cache ≈ ${noCache} tok — about the same so far`
+      ? `without cache ≈ ${noCache} tok — about the same${canReverse ? " so far" : ""}`
       : !mult
       ? `without cache ≈ ${noCache} tok`
       : dir === "more"
       ? `without cache ≈ ${noCache} tok — ~${mult}× more`
-      : `without cache ≈ ${noCache} tok — ~${mult}× less${lessCanReverse ? ", so far" : ""}`,
+      : `without cache ≈ ${noCache} tok — ~${mult}× less${canReverse ? ", so far" : ""}`,
   panelCostWarmupHint:
     "The cache has not earned back what it cost yet. A cache write is charged at more than a fresh input " +
     "token (1-hour ×2.0, 5-minute ×1.25). While the premium those writes pay is bigger than what the " +
@@ -551,15 +584,15 @@ const RU: Messages = {
   codexQuotaHeader: "**Тариф (реальный, с сервера):**",
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · план ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
-  codexCostCompact: (withCache, noCache, mult, dir) =>
+  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
     (dir === "same"
-      ? " (пока примерно столько же)"
+      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
       : !mult
       ? ""
       : dir === "more"
       ? ` (в ~${mult}× меньше)`
-      : ` (в ~${mult}× больше — ввод из кэша здесь оценён дороже свежего)`),
+      : ` (${canReverse ? "пока " : ""}в ~${mult}× больше)`),
   codexUsageWaitingCompact: "токен-эквивалент с кэшем: появится после следующего ответа Codex",
   codexContextShortUnavailable: "$(info) конт н/д",
   codexContextNoWindow: "окно контекста модели недоступно",
@@ -572,11 +605,22 @@ const RU: Messages = {
   codexPanelNoCacheReadHint:
     "В этой сессии из кэша ещё ничего не читалось, поэтому оба числа одинаковые. " +
     "Для записей в кэш у Codex отдельный счётчик, поэтому о том, что он уже мог сохранить, это ничего не говорит.",
-  codexPanelWriteNotCountedHint: (tokens) =>
-    `Codex сообщает ещё ${tokens} ток., записанных в кэш. Этот счётчик — часть его счётчика ввода, а не ` +
-    `добавка к нему, поэтому в число выше эти токены уже входят и второй раз не прибавляются. Чего Codex ` +
-    `не сообщает — насколько они пересекаются со счётчиком чтения из кэша, поэтому и по другому весу они ` +
-    `не пересчитаны. В строке «Детали» они показаны ровно так, как их назвал Codex.`,
+  codexPanelWarmupHint:
+    "Кэш пока не вернул того, что стоил. Срок жизни кэша Codex не сообщает, поэтому запись оценивается " +
+    "по вашему параметру `ccStatusbar.cacheWriteWeight` (по умолчанию 1.25) — дороже свежего входного " +
+    "токена. Пока эта надбавка больше, чем экономия на чтениях, число с кэшем оказывается больше. " +
+    "При весе чтения по умолчанию (0.1) каждое следующее чтение из того же кэша сокращает разрыв.",
+  codexPanelBothHint:
+    "Здесь обе стороны кэша только увеличивают это число. Запись считается дороже тех токенов, что в " +
+    "ней (срок жизни кэша Codex не сообщает, поэтому запись идёт по вашему " +
+    "`ccStatusbar.cacheWriteWeight`), и чтение тоже, потому что ваш `ccStatusbar.cacheReadWeight` " +
+    "больше 1 — переиспользование не экономит ничего против свежего чтения того же ввода. " +
+    "При значении по умолчанию (0.1) — экономило бы.",
+  codexPanelWritePricedHint: (tokens) =>
+    `Из ввода выше ${tokens} ток. записаны в кэш. В документации OpenAI этот счётчик — часть счётчика ` +
+    `ввода, а не добавка к нему, поэтому эти токены посчитаны один раз: по весу записи, а не как обычный ` +
+    `свежий ввод. Запись дороже свежего токена — это и есть цена прогрева. В строке «Детали» число ` +
+    `показано ровно так, как его назвал Codex.`,
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
   codexPanelTokenCostNote:
@@ -656,12 +700,13 @@ const RU: Messages = {
     "0% значит, что расхода на ожидание у него не обнаружено — все паузы измерены, и ни одна ничего " +
     "не стоила; " +
     "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль. " +
-    "Цифра больше нуля значит, что одна из пауз пережила его кэш. Чем была занята пауза, в журнале не " +
-    "написано: агента могли держать открытым, пока работал другой, а могла долго идти его собственная " +
+    "Цифра больше нуля значит, что одна из пауз пережила его кэш. Чем была занята пауза, этот замер не " +
+    "смотрит: агента могли держать открытым, пока работал другой, а могла долго идти его собственная " +
     "команда — прогон тестов, сборка.",
   panelAtLeastNote:
     "Знак ≥ значит, что цифра измерена не по всему журналу: часть пауз оценить не удалось, поэтому " +
     "настоящее число может быть больше, но не меньше.",
+  atLeastShort: "≥ — измерено не по всему журналу; настоящее число может быть больше, но не меньше",
   detailsRebuild: (tokens) => `повторные загрузки после простоя ${tokens}`,
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult, dir) =>
@@ -717,14 +762,14 @@ const RU: Messages = {
   tok: "ток",
   panelCostLabel: "Токен-эквивалент с кэшем",
   panelSavedLabel: "Сэкономлено кэшем",
-  panelCostCompare: (noCache, mult, dir, lessCanReverse = true) =>
+  panelCostCompare: (noCache, mult, dir, canReverse = true) =>
     dir === "same"
-      ? `без кэша было бы ≈ ${noCache} ток — пока примерно столько же`
+      ? `без кэша было бы ≈ ${noCache} ток — ${canReverse ? "пока " : ""}примерно столько же`
       : !mult
       ? `без кэша было бы ≈ ${noCache} ток`
       : dir === "more"
       ? `без кэша было бы ≈ ${noCache} ток — в ~${mult}× больше`
-      : `без кэша было бы ≈ ${noCache} ток — ${lessCanReverse ? "пока " : ""}в ~${mult}× меньше`,
+      : `без кэша было бы ≈ ${noCache} ток — ${canReverse ? "пока " : ""}в ~${mult}× меньше`,
   panelCostWarmupHint:
     "Кэш пока не вернул того, что стоил. Запись в кэш дороже свежего входного токена (часовая ×2.0, " +
     "пятиминутная ×1.25). Пока эта надбавка за записи больше, чем экономия на чтениях, число с кэшем " +

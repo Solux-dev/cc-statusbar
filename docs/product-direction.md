@@ -46,6 +46,16 @@ user.
   (it's already written — don't throw it away).
 - Do **not** make it the headline. Consider hiding it behind a setting later.
 
+> **Revised 25 August 2026 (owner's decision, shipped in 1.0.25).** The panel
+> now reads: model → quota + context → token-equivalent → details → cache →
+> delegated work. The token-equivalent is no longer hidden at the foot, and the
+> without-cache comparison moved from a hover into a visible line. The headline
+> is still the quota — that rule stands — but the cost block is a named section
+> above the fold, not a quiet extra. The reason is the delegated-work data:
+> once the panel could say what each subagent cost, burying it made the page's
+> most useful number the hardest one to find. The "hide it behind a setting"
+> idea is dropped.
+
 ### 3. The "efficiency engine" is **shelved** (not killed)
 
 Two independent reasons:

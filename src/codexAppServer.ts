@@ -55,8 +55,10 @@ export interface CodexTokenUsageBreakdownSnapshot {
    *  (`codex-rs/codex-api/src/sse/responses.rs`), and its own parse test carries
    *  `input 100 · cached 40 · write 60 · output 10 · total 110` — the write does
    *  not move the total. So nothing downstream may add it to the
-   *  token-equivalent. What Codex never states is how far the write count
-   *  overlaps `cached_input_tokens`, which is why it is not repriced either. */
+   *  token-equivalent; it is priced in place instead, at the write weight,
+   *  following OpenAI's own
+   *  `ordinaryInput = input − cached − cacheWrite`
+   *  (developers.openai.com/api/docs/guides/prompt-caching). */
   cacheWriteInputTokens: number | null;
 }
 

@@ -15,7 +15,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   large one is worth looking into. The figure says a pause outlasted the cache;
   it does not say what filled the pause, and the panel does not pretend
   otherwise — on the 503 agent logs measured here, 46% of the tokens counted
-  this way were spent inside the agent's own `Bash` call, not idling.
+  this way came from pauses whose longest silence ran from the agent's own
+  `Bash` call to its result, not from an agent sitting idle.
   `0%` means no waiting cost was measured for that agent: every
   pause it took was judged, and none of them priced to anything — an answer, not
   a gap — an agent that never paused reads `0%` for that reason. Where a **pause**
@@ -50,15 +51,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   around it while dropping this one — so the Details line said `write n/a` and
   the panel claimed Codex reports no writes at all. It is now read from both the
   app-server and rollout shapes, printed as Codex stated it, and named in the ⓘ
-  when it is not zero. It is deliberately **not** added to the token-equivalent:
-  Codex fills the field from `input_tokens_details.cache_write_tokens`, a
-  breakdown of its input count rather than an extra beside it — its own parse
-  test carries `input 100 · cached 40 · write 60 · output 10 · total 110`, where
-  the write moves no total — so those tokens are already inside the figure and
-  adding them would count them twice. Codex never states how far they overlap
-  `cached_input_tokens`, so they are not repriced either. A payload
+  when it is not zero, and priced in the token-equivalent at the write weight
+  (see the entry below on how). A payload
   that states nothing still reads `n/a`, which is not the same as a stated `0`.
-  (On this machine every one of 109,746 measured turns states `0`.)
+  (On this machine 54,873 turns across 1,700 rollouts state the counter, and
+  every one of them states `0`. The field appears twice per `token_count`
+  event — once in `total_token_usage`, once in `last_token_usage` — so a raw
+  occurrence count doubles the sample.)
 - **Two English strings survived in the Russian UI.** A Codex model with no
   context window printed “model context window unavailable”, and an agent whose
   type the transcript never named printed “agent”, both in Russian panels. Both
@@ -76,23 +75,45 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   was being told it had been left idle. Both surfaces now name a pause that
   outlasted the cache, list both possible causes, and attach the “start a fresh
   agent instead” advice only to the one it fits.
-- **The Codex ⓘ stated a gap in the protocol that is not there.** It said Codex
-  “does not state whether those tokens are already inside its input count”. It
-  does: the field is filled from `input_tokens_details.cache_write_tokens`, a
-  breakdown of the input count, and Codex's own parse test carries `input 100 ·
-  cached 40 · write 60 · output 10 · total 110`. The arithmetic is unchanged —
-  those tokens were already inside the figure and still are, and are still not
-  added twice — but the reason given is now the true one, on every surface, in
-  both languages, and in README and this file. What Codex genuinely leaves
-  unstated is how far the write count overlaps `cached_input_tokens`, which is
-  why the figure is not repriced.
-- **The Codex panel hedged a comparison that cannot turn.** With
-  `ccStatusbar.cacheReadWeight` above 1 it printed “~2× less, **so far**”, the
-  same wording the Claude panel uses — but on the Claude path a later cache
-  write can take that lead away, while on the Codex path the gap is exactly
-  `cached input × (weight − 1)` and has no write side to earn anything back. The
-  “so far” is now dropped on the Codex panel, matching the Codex hover, which
-  never carried it.
+- **A Codex cache write was priced as ordinary fresh input.** This is a change
+  to the figure, not only to the words around it. OpenAI documents
+  `input_tokens_details` as a breakdown of the input count, with
+  `ordinary = input − cached − cache_write`, cached reads at 0.1× and writes at
+  1.25×; Codex maps its field straight through from there, and its own parse
+  test carries `input 100 · cached 40 · write 60 · output 10 · total 110`, where
+  the write moves no total. The extension used to subtract only the reads, which
+  left every written token priced at 1× — for a payload of 100k input / 40k
+  cached / 12k written / 5k output the panel showed **72k** where it used to
+  show 69k. The three input buckets are now priced once each, and the write is
+  clamped to what the reads leave so a breakdown bigger than the whole can never
+  produce a negative bucket. Two earlier statements went with it: the ⓘ no
+  longer says the protocol is silent on the relationship (it is not), and the
+  panel no longer says the write is left out of the figure (it is not).
+- **The Codex panel gained the two hints it could never reach before.** With
+  writes priced, the with-cache figure can now be the larger one because of a
+  warm-up, not only because of a read weight above 1. Codex states no cache
+  lifetime, so it gets its own wording for those two sentences rather than
+  Claude's, which names “1-hour ×2.0, 5-minute ×1.25” — tiers this provider does
+  not have.
+- **“So far” was promised where the arithmetic forbids a turn.** The gap between
+  the two figures is the sum of `bucket × (weight − 1)`, so only a bucket priced
+  below a fresh token can ever close it. Both panels now drop the hedge when no
+  weight is below 1 — on the `about the same` line as well as the `~N× less`
+  one. This is not a Codex quirk: set `cacheReadWeight` above 1 on the Claude
+  panel and it drops there too.
+- **The `≥` marker had no definition on two of the surfaces that print it.** The
+  full note hangs off the delegated-work section, which can be absent entirely,
+  while the lead's own reloads appear in `Details` regardless and the hover has
+  no ⓘ at all. Both now carry the rule in one clause.
+- **Two published numbers overstated what was measured.** “Over half of
+  everything subagents write to cache” is 48% across the 505 agent logs measured
+  here (114.4M reload tokens against 236.8M written); it reaches 54% only once
+  each agent's unavoidable first load is set aside, which the sentence did not
+  say. And the Codex sample of “109,746 turns” was a count of field
+  occurrences — the counter appears twice in every `token_count` event, in
+  `total_token_usage` and again in `last_token_usage` — so the real sample is
+  54,873 turns. Both figures are stated as measured now, in README, this file
+  and the specs under `docs/`.
 
 ### Changed
 
@@ -122,10 +143,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   than anything this page prints (both figures round to the same text *and* the
   ratio rounds to 1×), it says exactly that instead. Naming one of two identical
   numbers the larger contradicts what is on the screen, and calling a hidden 98k
-  premium “nothing” contradicts the arithmetic. Codex can only ever be the read
-  weight — not because it reports no cache writes (it does), but because the
-  writes it reports sit inside its input count and so carry no premium of their
-  own. The hover names no cause at all; it has no room for the full
+  premium “nothing” contradicts the arithmetic. Codex gets its own wording for
+  the two of these that name Claude's cache tiers, because it states none. The
+  hover names no cause at all; it has no room for the full
   explanation, and naming the wrong one is worse than naming none.
 - **The page no longer hides its own footer behind a long list.** Order is now:
   model → quota + context → what the session cost → the raw figures behind it →
@@ -203,8 +223,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **What waiting costs.** While an agent sits idle its cache goes cold — 5
   minutes for a subagent, 1 hour for the main session. After a long enough pause
   it loads its whole context again and pays for that as a new cache write. That
-  spend was invisible, and on the sessions measured here it is **over half** of
-  everything the subagents write to cache. The delegated-work section now says
+  spend was invisible, and across the 505 agent logs measured here it is **48%**
+  of everything the subagents write to cache — **54%** once each agent's
+  unavoidable first load is set aside. The delegated-work section now says
   how much, in one line:
 
   > of that, ≈ 6M went on reloading context after pauses — an agent's cache

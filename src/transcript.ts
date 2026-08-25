@@ -277,9 +277,12 @@ export function readSessionTotals(cwd: string): {
    *  owner stepping away is not a defect, and a lead's cache_creation spike has
    *  real non-idle causes (a model switch during the break, compaction). */
   leadRebuild: IdleRebuild;
-  /** The same, summed over every subagent stream with a KNOWN tier. This is the
-   *  actionable one — an agent cannot switch model mid-run or be compacted, so
-   *  the confounders are absent by construction. */
+  /** The same, summed over EVERY subagent stream. A stream that never stated a
+   *  tier contributes no tokens (nothing can be measured against an unknown
+   *  lifetime) but does contribute to `unjudged` — which is what makes the
+   *  aggregate line print `≥` rather than a bare figure. This is the actionable
+   *  one: an agent cannot switch model mid-run or be compacted, so the
+   *  confounders the lead's own figure carries are absent by construction. */
   subagentRebuild: IdleRebuild;
 } {
   const main = findActiveTranscript(cwd);

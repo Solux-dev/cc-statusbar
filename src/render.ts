@@ -378,7 +378,10 @@ function detailsText(totals: Totals, rebuild: RebuildView | undefined, m: Messag
   // Same completeness rule as the panel rows: where part of the log could not be
   // judged, this is a floor. A quieter line is still a claim.
   const value = `${lead.unjudged > 0 ? "≥ " : ""}${fmtTokens(lead.tokens, lead.unjudged > 0)}`;
-  return `${base} · ${m.detailsRebuild(value)}`;
+  // The marker carries its definition with it here: this line does not depend on
+  // the delegated section, whose ⓘ is the only other place `≥` is explained.
+  const marker = lead.unjudged > 0 ? ` (${m.atLeastShort})` : "";
+  return `${base} · ${m.detailsRebuild(value)}${marker}`;
 }
 
 /** One compact tooltip line: how much of this session was delegated, to which
@@ -406,6 +409,9 @@ function subagentTooltipLine(
   if (reb.advise) {
     const bounded = (rebuild?.unjudged ?? 0) > 0;
     shown.push(m.subagentsRebuildFragment(`${bounded ? "≥ " : ""}${fmtTokens(reb.cost, bounded)}`));
+    // The hover has no ⓘ to hide a definition in, so the marker explains itself
+    // or it is a symbol the reader has to guess at.
+    if (bounded) shown.push(m.atLeastShort);
   }
   return m.subagentsLine(list.length, fmtTokens(total), shown.join(" · "));
 }
@@ -496,17 +502,48 @@ function codexCacheLine(details: CodexQuotaDetails, m: Messages): string | null 
   return null;
 }
 
+/** Codex's three input buckets, priced once each.
+ *
+ *  OpenAI documents `input_tokens_details` as a BREAKDOWN of `input_tokens`,
+ *  with `cached_tokens` and `cache_write_tokens` as disjoint parts of it:
+ *  "ordinaryInputTokens = inputTokens - cachedTokens - cacheWriteTokens"
+ *  (developers.openai.com/api/docs/guides/prompt-caching, which also states
+ *  0.1× for reads and 1.25× for writes on GPT-5.6+). Codex maps the field
+ *  straight through from there. So a write is neither an extra beside the input
+ *  count nor an ordinary fresh token: pricing it at 1× inside `freshInput`
+ *  understated the figure, and adding it on top would count it twice.
+ *
+ *  `writeInput` is clamped to what is left after the reads so the three parts
+ *  can never sum past `input_tokens`. Some payloads have been reported where
+ *  the two counts overlap; whatever the cause, a breakdown bigger than the
+ *  whole must not turn into a negative bucket. */
 function codexEconomy(
   details: CodexQuotaDetails
-): { effective: number; noCache: number; saved: number; mult: string | null; dir: CostDirection; work: number } | null {
+): {
+  effective: number;
+  noCache: number;
+  saved: number;
+  mult: string | null;
+  dir: CostDirection;
+  work: number;
+  cachedInput: number;
+  writeInput: number;
+} | null {
   if (!details.usage) return null;
   const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
+  // No cache TIER is ever stated by Codex, so a write can only be priced at the
+  // setting for writes of unknown lifetime — the same rule the Claude path uses
+  // for a write whose tier its transcript did not state.
+  const cacheWriteWeight = details.weights?.cacheWrite ?? 1.25;
   const cachedInput = Math.max(0, details.usage.cachedInputTokens);
-  const freshInput = Math.max(0, details.usage.inputTokens - cachedInput);
+  const afterCached = Math.max(0, details.usage.inputTokens - cachedInput);
+  const statedWrite = Math.max(0, details.usage.cacheWriteInputTokens ?? 0);
+  const writeInput = Math.min(statedWrite, afterCached);
+  const freshInput = afterCached - writeInput;
   // Codex total_tokens = input_tokens + output_tokens; reasoning is a detail of output.
   const output = Math.max(0, details.usage.outputTokens);
   const work = freshInput + output;
-  const effective = work + cachedInput * cacheReadWeight;
+  const effective = work + cachedInput * cacheReadWeight + writeInput * cacheWriteWeight;
   const noCache = details.usage.inputTokens + output;
   const saved = Math.max(0, noCache - effective);
   return {
@@ -515,13 +552,38 @@ function codexEconomy(
     saved,
     ...costDirection(effective, noCache),
     work,
+    cachedInput,
+    writeInput,
   };
+}
+
+/** Can a later turn still narrow or close the gap between the two figures?
+ *  Only a bucket priced BELOW a fresh token can: the gap is
+ *  `Σ bucket × (weight − 1)`, so every weight at or above 1 can only widen it.
+ *  This is what the "so far" in `panelCostCompare` promises, and promising it
+ *  where no weight is below 1 states a turn the arithmetic forbids. */
+function cacheCanReverse(weights: Weights, writeWeights: number[]): boolean {
+  return weights.cacheRead < 1 || writeWeights.some((w) => w < 1);
+}
+
+/** The Codex twin. Codex states no cache tier, so a write here can only ever be
+ *  priced at the unknown-lifetime setting — one weight, not three. */
+function codexCanReverse(details: CodexQuotaDetails): boolean {
+  const cacheRead = details.weights?.cacheRead ?? 0.1;
+  const cacheWrite = details.weights?.cacheWrite ?? 1.25;
+  return cacheCanReverse({ cacheRead, cacheWrite }, [cacheWrite]);
 }
 
 function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
   const economy = codexEconomy(details);
   if (!economy) return m.codexUsageWaitingCompact;
-  return m.codexCostCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache), economy.mult, economy.dir);
+  return m.codexCostCompact(
+    fmtTokens(economy.effective),
+    fmtTokens(economy.noCache),
+    economy.mult,
+    economy.dir,
+    codexCanReverse(details)
+  );
 }
 
 function codexDetailsLine(details: CodexQuotaDetails, m: Messages): string {
@@ -928,8 +990,9 @@ export function buildPanelHtml(
   const { dir: costDir, mult } = costDirection(eff, noCache);
 
   // Identity only — which model and effort produced the numbers below. The page
-  // now opens on "how much have I got left" (quota), so the token-equivalent
-  // block moved to the foot of the page; see `costSection`.
+  // opens on "how much have I got left" (quota + context); the token-equivalent
+  // follows as the third block, above cache and delegated work. See
+  // `costSection`.
   const rows: string[] = [];
   const identity = [
     modelLine(model, m),
@@ -1207,7 +1270,16 @@ export function buildPanelHtml(
     `<div class="sep"></div>` +
     `<div class="row">${hintSpan(m.panelCostLabel, costHint)}` +
     `<b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>` +
-    `<div class="sub">${esc(m.panelCostCompare(fmtTokens(noCache), mult, costDir))}</div>`;
+    // Claude prices writes by tier, so all three write weights are in play when
+    // asking whether a later turn could still narrow the gap.
+    `<div class="sub">${esc(
+      m.panelCostCompare(
+        fmtTokens(noCache),
+        mult,
+        costDir,
+        cacheCanReverse(weights, [CACHE_WRITE_WEIGHT_1H, CACHE_WRITE_WEIGHT_5M, weights.cacheWrite])
+      )
+    )}</div>`;
 
   // muted technical breakdown
   const detailsSection =
@@ -1295,33 +1367,41 @@ export function buildCodexPanelHtml(
   // page under the reader.
   const costRows: string[] = [];
   if (economy) {
-    // Same rule as the Claude panel, with one difference: no write premium can
-    // ever apply here. Codex's write counter comes from
-    // `input_tokens_details.cache_write_tokens` — a BREAKDOWN of `input_tokens`,
-    // not an addend beside it — so those tokens are already inside `effective`
-    // and nothing is added a second time. The only thing that can invert this
-    // comparison is the cache-read weight.
-    // A stated write count is still named in the ⓘ rather than passed over in
-    // silence: Codex never says how far it overlaps `cached_input_tokens`, so
-    // the figure cannot reprice it, and a reader who sees `write 12k` in Details
-    // is owed the reason it does not move the number above.
+    // Same shape as the Claude panel, and since round 16 the same arithmetic:
+    // both sides of the cache exist here too, so both can move this figure.
+    // Codex states no cache TIER, so a write can only be priced by the
+    // unstated-tier setting — which is why the two hints that name Claude's
+    // tiers have Codex twins instead of being reused.
     const statedWrite = codexCacheWrite(details);
     const writeNote =
-      statedWrite && statedWrite > 0 ? ` ${m.codexPanelWriteNotCountedHint(fmtTokens(statedWrite))}` : "";
+      statedWrite && statedWrite > 0 ? ` ${m.codexPanelWritePricedHint(fmtTokens(statedWrite))}` : "";
+    // Same ordering as `costCauseHint`, minus the "invisible difference" branch:
+    // that one guards a footnote the Claude panel prints beside a comparison it
+    // has already rounded, and this panel reaches it through the same
+    // `costDirection`, so `panelCostEvenHint` below already covers the case the
+    // arithmetic calls level.
+    const readW = details.weights?.cacheRead ?? 0.1;
+    const writeW = details.weights?.cacheWrite ?? 1.25;
+    const readDelta = economy.cachedInput * (readW - 1);
+    const writeDelta = economy.writeInput * (writeW - 1);
     const costHint =
       economy.noCache > economy.effective
         ? `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok}` +
           `${economy.mult && economy.dir === "more" ? ` ${m.codexLowerMult(economy.mult)}` : ""}.${writeNote} ` +
           m.codexPanelTokenCostNote
         : `${
-            // Codex's own sentence, not Claude's: all we know is that no cached
-            // input was reported. Claude's version also states that nothing was
-            // WRITTEN to cache, which here is a counter of its own — a session
-            // can read nothing and still have written.
-            Math.max(0, details.usage?.cachedInputTokens ?? 0) <= 0
+            // Codex's own sentence, not Claude's: it states that nothing was
+            // READ, and says so only when nothing was written either — with a
+            // write priced in, the two figures are no longer the same number
+            // and the sentence would contradict the line under it.
+            economy.cachedInput <= 0 && economy.writeInput <= 0
               ? m.codexPanelNoCacheReadHint
-              : economy.noCache === economy.effective
+              : readDelta + writeDelta <= ZERO_TOLERANCE
               ? m.panelCostEvenHint
+              : readDelta > 0 && writeDelta > 0
+              ? m.codexPanelBothHint
+              : writeDelta >= readDelta
+              ? m.codexPanelWarmupHint
               : m.panelCostWeightHint
           }${writeNote} ${m.codexPanelTokenCostNote}`;
     costRows.push(
@@ -1331,10 +1411,11 @@ export function buildCodexPanelHtml(
     // Same visible comparison as the Claude panel — switching provider must not
     // move a number the reader has learned to look for.
     costRows.push(
-      // `lessCanReverse: false` — see the note on `panelCostCompare`. On this
-      // path the gap is `cachedInput × (cacheReadWeight − 1)` and has no write
-      // side to earn it back, so "so far" would promise a turn that cannot come.
-      `<div class="sub">${esc(m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir, false))}</div>`
+      // See the note on `panelCostCompare`: the hedge is dropped where no weight
+      // is below 1, because then no later turn can narrow the gap.
+      `<div class="sub">${esc(
+        m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir, codexCanReverse(details))
+      )}</div>`
     );
   } else {
     costRows.push(`<div class="row">${hintSpan(m.codexPanelCostLabel, m.codexPanelTokenCostNote)}<b>—</b></div>`);
