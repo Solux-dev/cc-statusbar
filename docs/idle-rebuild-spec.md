@@ -91,7 +91,7 @@ Delegated work (subagents)
   of that, ≈ 6M went on reloading context after pauses — an agent's cache
   stays warm for 5 minutes
   [group rows, agent list — unchanged]
-  Usually an agent left open while another one works. …existing note…
+  A pause past the agent's cache lifetime… …existing note…
 ```
 ```
 Делегированная работа (субагенты)
@@ -99,7 +99,7 @@ Delegated work (subagents)
   из них ≈ 6M ушло на повторную загрузку контекста после пауз — кэш агента
   держится 5 минут
   [строки по моделям, список агентов — без изменений]
-  Обычно это агент, оставленный открытым, пока работает другой. …примечание…
+  Пауза дольше срока жизни кэша… …примечание…
 ```
 
 One muted line, in the same style as the summary above it, carrying three
@@ -138,8 +138,13 @@ Every string in this feature obeys all five:
    "cache_creation after TTL expiry".
 2. **A number is followed by its meaning.** `≈6M tok · 7% of session` — the
    absolute figure alone means nothing to a first-time reader.
-3. **State the cause, never a verdict.** "Usually an agent left open while
-   another one works." Never "you wasted", never a score, never a grade.
+3. **State only the cause the data carries, and never a verdict.** The
+   measurement is a gap longer than the cache's life — it does not say what
+   filled the gap. Measured on 503 agent logs here, 46% of the tokens counted
+   this way were spent inside the agent's own `Bash` call (a test run, a build),
+   not with the agent left idle, so a single named cause would be wrong about
+   half the time. Name both, mark which one the advice applies to. Never "you
+   wasted", never a score, never a grade.
 4. **No jargon without its plain-words twin in the same line.** The `ⓘ`
    footnote carries the full explanation; the visible line must be readable
    without opening it.

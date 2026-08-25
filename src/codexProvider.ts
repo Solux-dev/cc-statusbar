@@ -80,8 +80,13 @@ export function codexTotals(usage: CodexTokenUsage | null): Totals {
     output,
     work: input + output,
     cacheRead: total.cachedInputTokens || 0,
-    // Codex does not expose a cache-write count at all (let alone its tier), so
-    // every write bucket stays 0 — shown as unavailable, never guessed.
+    // Codex DOES state a cache-write count, but it is a breakdown of
+    // `input_tokens` (see `codexAppServer.ts`), so those tokens are already
+    // inside `input` above and must not be counted a second time here. It also
+    // exposes no cache TIER, and never says how far the write count overlaps
+    // the cached-input count, so the tiered write buckets stay 0 — shown as
+    // unavailable, never guessed. The stated figure reaches the panel through
+    // `CodexQuotaDetails.usage.cacheWriteInputTokens`, not through this split.
   };
 }
 

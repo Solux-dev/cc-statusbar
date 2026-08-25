@@ -48,7 +48,15 @@ export interface CodexTokenUsageBreakdownSnapshot {
    *  purpose: older payloads omit it entirely, and requiring it would drop the
    *  whole breakdown for them. `null` means the payload said nothing, which is
    *  NOT the same as a stated 0 — every turn measured on this machine states 0,
-   *  and the number is Codex's to state, not ours to assume. */
+   *  and the number is Codex's to state, not ours to assume.
+   *
+   *  These tokens sit INSIDE `input_tokens`, they are not an extra beside it:
+   *  Codex fills the field from `input_tokens_details.cache_write_tokens`
+   *  (`codex-rs/codex-api/src/sse/responses.rs`), and its own parse test carries
+   *  `input 100 · cached 40 · write 60 · output 10 · total 110` — the write does
+   *  not move the total. So nothing downstream may add it to the
+   *  token-equivalent. What Codex never states is how far the write count
+   *  overlaps `cached_input_tokens`, which is why it is not repriced either. */
   cacheWriteInputTokens: number | null;
 }
 

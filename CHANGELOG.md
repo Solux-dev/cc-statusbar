@@ -12,8 +12,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   spend that went on loading its context again after a pause, and the tokens
   behind the share. The percentage says how bad, the tokens say whether it is
   worth changing anything: 31% of a small agent is a rounding error, 31% of a
-  large one is a reason to close an agent instead of leaving it open through a
-  long review. `0%` means no waiting cost was measured for that agent: every
+  large one is worth looking into. The figure says a pause outlasted the cache;
+  it does not say what filled the pause, and the panel does not pretend
+  otherwise — on the 503 agent logs measured here, 46% of the tokens counted
+  this way were spent inside the agent's own `Bash` call, not idling.
+  `0%` means no waiting cost was measured for that agent: every
   pause it took was judged, and none of them priced to anything — an answer, not
   a gap — an agent that never paused reads `0%` for that reason. Where a **pause**
   could not be judged and nothing else priced to anything (no cache lifetime
@@ -48,14 +51,48 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   the panel claimed Codex reports no writes at all. It is now read from both the
   app-server and rollout shapes, printed as Codex stated it, and named in the ⓘ
   when it is not zero. It is deliberately **not** added to the token-equivalent:
-  Codex's protocol never says whether those tokens already sit inside
-  `input_tokens`, and adding them on a guess would count them twice. A payload
+  Codex fills the field from `input_tokens_details.cache_write_tokens`, a
+  breakdown of its input count rather than an extra beside it — its own parse
+  test carries `input 100 · cached 40 · write 60 · output 10 · total 110`, where
+  the write moves no total — so those tokens are already inside the figure and
+  adding them would count them twice. Codex never states how far they overlap
+  `cached_input_tokens`, so they are not repriced either. A payload
   that states nothing still reads `n/a`, which is not the same as a stated `0`.
   (On this machine every one of 109,746 measured turns states `0`.)
 - **Two English strings survived in the Russian UI.** A Codex model with no
   context window printed “model context window unavailable”, and an agent whose
   type the transcript never named printed “agent”, both in Russian panels. Both
   now follow the interface language.
+- **The `idle` column blamed the wrong thing.** Its legend read “a figure above
+  zero is not the agent's doing: its cache went cold while it was left open”,
+  and the advice line under the list opened “usually an agent left open while
+  another one works”. What the extension actually measures is a gap between two
+  turns longer than the live cache lifetime — it never looks at what filled the
+  gap. Re-measured against 503 agent logs on the author's machine: of the 448
+  counted gaps carrying 114.4M tokens, **188 gaps and 52.6M tokens (46%) ran
+  from the agent's own `Bash` tool call to its result** — a test suite, a build —
+  and 63 of the 193 agents that would show a non-zero figure have it caused
+  mostly by their own command. An agent that spends ten minutes running tests
+  was being told it had been left idle. Both surfaces now name a pause that
+  outlasted the cache, list both possible causes, and attach the “start a fresh
+  agent instead” advice only to the one it fits.
+- **The Codex ⓘ stated a gap in the protocol that is not there.** It said Codex
+  “does not state whether those tokens are already inside its input count”. It
+  does: the field is filled from `input_tokens_details.cache_write_tokens`, a
+  breakdown of the input count, and Codex's own parse test carries `input 100 ·
+  cached 40 · write 60 · output 10 · total 110`. The arithmetic is unchanged —
+  those tokens were already inside the figure and still are, and are still not
+  added twice — but the reason given is now the true one, on every surface, in
+  both languages, and in README and this file. What Codex genuinely leaves
+  unstated is how far the write count overlaps `cached_input_tokens`, which is
+  why the figure is not repriced.
+- **The Codex panel hedged a comparison that cannot turn.** With
+  `ccStatusbar.cacheReadWeight` above 1 it printed “~2× less, **so far**”, the
+  same wording the Claude panel uses — but on the Claude path a later cache
+  write can take that lead away, while on the Codex path the gap is exactly
+  `cached input × (weight − 1)` and has no write side to earn anything back. The
+  “so far” is now dropped on the Codex panel, matching the Codex hover, which
+  never carried it.
 
 ### Changed
 
@@ -85,8 +122,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   than anything this page prints (both figures round to the same text *and* the
   ratio rounds to 1×), it says exactly that instead. Naming one of two identical
   numbers the larger contradicts what is on the screen, and calling a hidden 98k
-  premium “nothing” contradicts the arithmetic. Codex can only ever be the read weight: it reports no
-  cache writes. The hover names no cause at all; it has no room for the full
+  premium “nothing” contradicts the arithmetic. Codex can only ever be the read
+  weight — not because it reports no cache writes (it does), but because the
+  writes it reports sit inside its input count and so carry no premium of their
+  own. The hover names no cause at all; it has no room for the full
   explanation, and naming the wrong one is worse than naming none.
 - **The page no longer hides its own footer behind a long list.** Order is now:
   model → quota + context → what the session cost → the raw figures behind it →

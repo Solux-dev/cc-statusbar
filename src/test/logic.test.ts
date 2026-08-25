@@ -3510,8 +3510,37 @@ test("the reload advice describes what the waiting agent pays, not a fresh agent
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
   );
-  assert.match(en, /often more than starting a fresh agent with a smaller prompt/);
+  assert.match(en, /starting a fresh agent with a smaller prompt is often cheaper/);
   assert.ok(!/a fresh agent costs less than the one that waited/.test(en));
+});
+
+// ---------------------------------------------------------------------------
+// Round 15 — the fifteenth review. The advice used to open by naming ONE cause
+// ("usually an agent left open while another one works"). Re-measured on 503
+// agent logs here: 188 of the 448 counted gaps, carrying 46% of the tokens, run
+// from the agent's own Bash tool_use to its tool_result — a test suite, a build.
+// The measurement is a gap longer than the cache's life and nothing more; it
+// never looks inside the gap, so it cannot pick between the two causes.
+// ---------------------------------------------------------------------------
+
+test("the reload advice names both causes of a pause, not just the one it can act on", () => {
+  const en = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
+  );
+  // The agent's own long command is named…
+  assert.match(en, /own command running long/);
+  // …and the "close it instead" advice is scoped to the case it fits, never
+  // offered as the explanation of every figure.
+  assert.match(en, /Where it is the first/);
+  assert.ok(!/Usually an agent left open while another one works/.test(en));
+  const ru = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
+  );
+  assert.match(ru, /собственная долгая команда/);
+  assert.match(ru, /В первом случае/);
+  assert.ok(!/Обычно это агент, оставленный открытым/.test(ru));
 });
 
 // ---------------------------------------------------------------------------
@@ -3527,15 +3556,37 @@ test("the idle legend blames a cold cache only where a cost was measured", () =>
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
   );
-  assert.match(en, /A figure above zero is not the agent/);
+  assert.match(en, /A figure above zero means one of its pauses outlasted its cache/);
   assert.ok(!/not the agent&#39;s doing either way/.test(en), "…the form that covered 0% and — as well");
   assert.ok(!/It is not the agent/.test(en));
   const ru = buildPanelHtml(
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
   );
-  assert.match(ru, /Цифра больше нуля — не вина агента/);
+  assert.match(ru, /Цифра больше нуля значит, что одна из пауз пережила его кэш/);
   assert.ok(!/И в том, и в другом случае/.test(ru));
+});
+
+test("the idle legend states a pause, never what the log does not record filling it", () => {
+  // Round 15. `idleRebuildOf` compares two timestamps against the live cache
+  // lifetime and never reads what lies between them, so "its cache went cold
+  // while it was left open" asserted a cause the measurement cannot see — and
+  // on this machine's 503 agent logs it is the wrong cause for 46% of the
+  // tokens it counts.
+  const en = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(en, /What filled that pause is not in the log/);
+  assert.match(en, /its own command may have run long/);
+  assert.ok(!/is not the agent&#39;s doing: its cache went cold while it was left open/.test(en));
+  const ru = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(ru, /Чем была занята пауза, в журнале не написано/);
+  assert.match(ru, /его собственная\s+команда/);
+  assert.ok(!/не вина агента: его кэш остыл/.test(ru));
 });
 
 test("a premium too small to change either figure is not announced as one", () => {
@@ -3703,7 +3754,7 @@ test("Codex never claims nothing was WRITTEN to cache — that counter is its ow
   const quota = { state: "ok" as const, fiveH: null, sevenD: { pct: 10, resetAt: now + 86400 } };
   const en = buildCodexPanelHtml(quota, now, "en", details);
   assert.match(en, /Nothing has been read from cache in this session yet/);
-  assert.match(en, /Codex counts cache writes separately/);
+  assert.match(en, /Codex keeps its own counter for cache writes/);
   assert.ok(!/read from or written to cache/.test(en), "…Claude's wording, which asserts a write count");
   assert.ok(!/reports no cache writes at all/.test(en), "…and the claim that Codex has no such counter");
   const ru = buildCodexPanelHtml(quota, now, "ru", details);
@@ -3736,8 +3787,11 @@ test("a cache-write count Codex states is shown, not silently dropped", () => {
   // Round 14. The field exists in Codex's protocol (`cache_write_input_tokens`)
   // and is 0 in all 109,746 turns measured on this machine — but a stated
   // non-zero must not vanish from a panel about token cost. It is not folded
-  // into the token-equivalent either: the protocol never says whether those
-  // tokens already sit inside `input_tokens`, and guessing would double-count.
+  // into the token-equivalent either — but round 15 corrected the reason: Codex
+  // fills the field from `input_tokens_details.cache_write_tokens`, a breakdown
+  // of `input_tokens`, so those tokens are ALREADY inside the figure and adding
+  // them would double-count. What is genuinely unstated is the overlap with
+  // `cached_input_tokens`, which is why they are not repriced.
   const now = 1000;
   const quota = { state: "ok" as const, fiveH: null, sevenD: null };
   const stated = {
@@ -3764,6 +3818,70 @@ test("a cache-write count Codex states is shown, not silently dropped", () => {
   const zero = { ...stated, usage: { ...stated.usage, cacheWriteInputTokens: 0 } };
   assert.match(buildCodexPanelHtml(quota, now, "en", zero), /cache: read 40k \/ write 0/);
   assert.ok(!/also reports/.test(buildCodexPanelHtml(quota, now, "en", zero)));
+});
+
+test("the Codex ⓘ gives the true reason the write count is not added, not a gap in the protocol", () => {
+  // Round 15. Codex DOES fix the relationship — the field comes from
+  // `input_tokens_details.cache_write_tokens`, and its own parse test carries
+  // input 100 / cached 40 / write 60 / output 10 / total 110, where the write
+  // moves no total. Saying "the protocol does not state whether…" was false.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const stated = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 40_000,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 12_000,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", stated);
+  assert.match(en, /a breakdown of its input count/);
+  assert.match(en, /already inside the figure above/);
+  assert.ok(!/does not state whether those tokens are already inside/.test(en));
+  const ru = buildCodexPanelHtml(quota, now, "ru", stated);
+  assert.match(ru, /часть его счётчика ввода/);
+  assert.ok(!/не сказано, входят ли эти/.test(ru));
+
+  // And the arithmetic did NOT move: the write is inside the input count, so
+  // the token-equivalent is what it was before this text was corrected.
+  // 60k fresh + 5k output + 40k read × 0.1 = 69k.
+  assert.match(en, /≈ 69k/);
+});
+
+test("only the Claude panel promises the comparison may still turn", () => {
+  // Round 15. On the Claude path a with-cache figure that is currently smaller
+  // can lose that lead to a later write, so "so far" is honest. On the Codex
+  // path the gap is exactly cachedInput × (cacheReadWeight − 1) and there is no
+  // write side to earn anything back, so nothing can turn while the setting
+  // stands — and the Codex hover never carried the hedge in the first place.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const codex = {
+    source: "stdio" as const,
+    weights: { cacheRead: 2, cacheWrite: 1.25 },
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 40_000,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", codex);
+  assert.match(en, /× less/);
+  assert.ok(!/less, so far/.test(en));
+  const ru = buildCodexPanelHtml(quota, now, "ru", codex);
+  assert.match(ru, /в ~\d[\d.]*× меньше/);
+  assert.ok(!/пока в ~/.test(ru));
+
+  // The Claude panel keeps it: a write it has not yet earned back can still
+  // reverse the direction there.
+  const claude = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 100_000, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  assert.match(buildPanelHtml(claude, { cacheRead: 2, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "en"), /less, so far/);
 });
 
 test("an arithmetic zero is a zero, not a premium of 0.0000000000146 tokens", () => {

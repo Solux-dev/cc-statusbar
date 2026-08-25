@@ -217,8 +217,12 @@ be measured, the column is left out altogether rather than filling the list with
 dashes. Where part of a log could be measured and part could not, the figure is
 marked `≥` — a floor, truncated rather than rounded, so it never claims more than
 was measured. On 500 real agent logs measured here, 99% carried a
-number and 1% showed the dash. A figure above zero is not the agent's doing —
-its cache went cold while it was left open.
+number and 1% showed the dash. A figure above zero means one of that agent's
+pauses outlasted its cache. It does **not** say what filled the pause: the agent
+may have been left open while another one worked, or its own command may have
+run long — a test suite, a build. On the 503 agent logs measured here, 46% of the
+tokens counted this way were spent inside the agent's own `Bash` call, so naming
+one cause would be naming the wrong one about half the time.
 
 Agents spawned by *another* agent rather than by the Lead are marked `depth N`
 (real and common — nesting reaches depth 5 in practice), so the breakdown says
@@ -285,10 +289,11 @@ to look anything up:
 
 For Claude Code these are read straight from the per-turn
 `cache_creation.ephemeral_{1h,5m}` fields in the local transcript, so they stay
-correct even as Anthropic adjusts caching behaviour. Codex currently exposes
-cached input tokens, so the extension can show **Input from cache**, but it does
-not expose a cache tier or separate cache-write count; those lines are shown as
-not available instead of guessed.
+correct even as Anthropic adjusts caching behaviour. Codex exposes cached input
+tokens, so the extension can show **Input from cache**, and it states a
+cache-write count too (`cache_write_input_tokens`) — shown in `Details` exactly
+as Codex reports it. What Codex does not expose is a cache **tier**, so that
+line is shown as not available instead of guessed.
 
 ## Glossary — what you see / Что вы видите
 
@@ -430,11 +435,14 @@ _По умолчанию язык берётся из языка редакто�
 - **Context and cached input** — read from Codex token counters in local Codex
   history (`~/.codex/sessions/...jsonl`, `token_count`) and from app-server
   token-usage notifications when available.
-- **Not guessed** — Codex exposes no cache tier and no money price, and its
-  cache-write counter (`cache_write_input_tokens`) carries no stated
-  relationship to its input count, so it is shown as Codex reports it rather
-  than folded into the token-equivalent. The extension shows what is missing as
-  unavailable and labels the top number as **token-equivalent**, not billing.
+- **Not guessed** — Codex exposes no cache tier and no money price. Its
+  cache-write counter (`cache_write_input_tokens`) is a *breakdown* of its input
+  count, not an extra beside it, so those tokens are already inside the
+  token-equivalent and are never added a second time; Codex does not say how far
+  they overlap its cached-input count, so they are not repriced either, and
+  `Details` shows the figure exactly as Codex reports it. The extension shows
+  what is missing as unavailable and labels the top number as
+  **token-equivalent**, not billing.
 
 ## Privacy / security
 

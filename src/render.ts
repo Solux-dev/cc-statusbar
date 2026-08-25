@@ -1295,13 +1295,16 @@ export function buildCodexPanelHtml(
   // page under the reader.
   const costRows: string[] = [];
   if (economy) {
-    // Same rule as the Claude panel, with one difference: Codex does not report
-    // cache writes inside the token-equivalent (its own protocol never states
-    // how its write counter relates to `input_tokens`), so the only thing that
-    // can invert this comparison is the cache-read weight.
-    // A write count Codex actually states is never dropped in silence: the
-    // figure cannot absorb it (see the hint — the protocol does not say whether
-    // those tokens are already inside `input_tokens`), so the ⓘ names it.
+    // Same rule as the Claude panel, with one difference: no write premium can
+    // ever apply here. Codex's write counter comes from
+    // `input_tokens_details.cache_write_tokens` — a BREAKDOWN of `input_tokens`,
+    // not an addend beside it — so those tokens are already inside `effective`
+    // and nothing is added a second time. The only thing that can invert this
+    // comparison is the cache-read weight.
+    // A stated write count is still named in the ⓘ rather than passed over in
+    // silence: Codex never says how far it overlaps `cached_input_tokens`, so
+    // the figure cannot reprice it, and a reader who sees `write 12k` in Details
+    // is owed the reason it does not move the number above.
     const statedWrite = codexCacheWrite(details);
     const writeNote =
       statedWrite && statedWrite > 0 ? ` ${m.codexPanelWriteNotCountedHint(fmtTokens(statedWrite))}` : "";
@@ -1313,8 +1316,8 @@ export function buildCodexPanelHtml(
         : `${
             // Codex's own sentence, not Claude's: all we know is that no cached
             // input was reported. Claude's version also states that nothing was
-            // WRITTEN to cache — a separate counter here, with no stated
-            // relationship to the input count.
+            // WRITTEN to cache, which here is a counter of its own — a session
+            // can read nothing and still have written.
             Math.max(0, details.usage?.cachedInputTokens ?? 0) <= 0
               ? m.codexPanelNoCacheReadHint
               : economy.noCache === economy.effective
@@ -1328,7 +1331,10 @@ export function buildCodexPanelHtml(
     // Same visible comparison as the Claude panel — switching provider must not
     // move a number the reader has learned to look for.
     costRows.push(
-      `<div class="sub">${esc(m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir))}</div>`
+      // `lessCanReverse: false` — see the note on `panelCostCompare`. On this
+      // path the gap is `cachedInput × (cacheReadWeight − 1)` and has no write
+      // side to earn it back, so "so far" would promise a turn that cannot come.
+      `<div class="sub">${esc(m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir, false))}</div>`
     );
   } else {
     costRows.push(`<div class="row">${hintSpan(m.codexPanelCostLabel, m.codexPanelTokenCostNote)}<b>—</b></div>`);

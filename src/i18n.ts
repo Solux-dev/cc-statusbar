@@ -208,14 +208,23 @@ export interface Messages {
   /** The comparison, as a VISIBLE line under the headline number: what the same
    *  session would have cost with nothing reused. It is the one figure that says
    *  what the cache is doing for you, so it is not left to a hover. */
-  panelCostCompare: (noCache: string, mult: string | null, dir: CostDirection) => string;
+  /** `lessCanReverse` is what the "so far" hangs on. On the Claude path a
+   *  with-cache figure that is currently the smaller one can still lose that
+   *  lead to a later write, so the hedge is honest. On the Codex path the gap
+   *  is exactly `cachedInput × (cacheReadWeight − 1)` — there is no write side
+   *  to earn anything back — so while the setting stands the direction cannot
+   *  reverse, and promising that it might would be a statement the arithmetic
+   *  forbids. */
+  panelCostCompare: (noCache: string, mult: string | null, dir: CostDirection, lessCanReverse?: boolean) => string;
   /** Replaces the "cache saved" footnote while the with-cache figure is NOT the
    *  smaller one. Two texts, because there are two different causes and naming
    *  the wrong one invents a fact: `Warmup` when this session has written to
    *  cache (a write is priced above a fresh token and earns that back on later
    *  reads), `Weight` when it has not — then the only thing that can invert the
-   *  comparison is a `cacheReadWeight` set above 1. Codex always gets `Weight`:
-   *  it does not report cache writes at all. */
+   *  comparison is a `cacheReadWeight` set above 1. Codex never gets `Warmup`:
+   *  its write counter is a breakdown of its input count, not a separate charge,
+   *  so `codexEconomy` prices no write premium and a read weight above 1 is the
+   *  only thing that can invert the Codex comparison. */
   panelCostWarmupHint: string;
   panelCostWeightHint: string;
   /** …and the third case: no cache activity at all, so the two figures are the
@@ -294,11 +303,12 @@ const EN: Messages = {
   codexPanelSavedLabel: "Cache saved",
   codexPanelNoCacheReadHint:
     "Nothing has been read from cache in this session yet, so the two figures are the same number. " +
-    "Codex counts cache writes separately, so this says nothing about what it may already have stored.",
+    "Codex keeps its own counter for cache writes, so this says nothing about what it may already have stored.",
   codexPanelWriteNotCountedHint: (tokens) =>
-    `Codex also reports ${tokens} tok written to cache. Its protocol does not state whether those ` +
-    `tokens are already inside its input count, so they are left out of the figure above rather than ` +
-    `added to it twice — the Details line shows them as Codex stated them.`,
+    `Codex also reports ${tokens} tok written to cache. That counter is a breakdown of its input count, ` +
+    `not an extra beside it, so those tokens are already inside the figure above and are not added a ` +
+    `second time. What Codex does not state is how far they overlap its cached-input count, so they are ` +
+    `not repriced either — the Details line shows them exactly as Codex stated them.`,
   codexLowerMult: (mult) => `(~${mult}× lower)`,
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
   codexPanelTokenCostNote:
@@ -353,7 +363,7 @@ const EN: Messages = {
     "This is how many tokens went into such reloads. A pause is sometimes unavoidable, but it is paid for " +
     "all the same — which is why the figure is shown as it is.",
   panelSubagentsRebuildNote:
-    "Usually an agent left open while another one works. Past its cache's lifetime — five minutes for most agents — it pays to load its whole context again, which is often more than starting a fresh agent with a smaller prompt.",
+    "A pause past the agent's cache lifetime — five minutes for most agents — makes it load its whole context again. The pause can be the agent left open while another one works, or the agent's own command running long, such as a test suite or a build. Where it is the first, starting a fresh agent with a smaller prompt is often cheaper.",
   subagentsRebuildFragment: (cost) => `${cost} reloaded after pauses`,
   panelSubagentsExpand: "Show each agent ▾",
   panelSubagentsCollapse: "Hide the agent list ▴",
@@ -378,7 +388,9 @@ const EN: Messages = {
     "0% means no waiting cost was measured for it — every pause it took was judged, and none of them " +
     "priced to anything; " +
     "a dash means the log did not allow the measurement, which is a different thing from zero. " +
-    "A figure above zero is not the agent's doing: its cache went cold while it was left open.",
+    "A figure above zero means one of its pauses outlasted its cache. What filled that pause is not in " +
+    "the log: the agent may have been left open while another one worked, or its own command may have " +
+    "run long — a test run, a build.",
   panelAtLeastNote:
     "≥ marks a figure measured from part of the log only: some pauses could not be judged, so the real " +
     "number can be higher, never lower.",
@@ -437,14 +449,14 @@ const EN: Messages = {
   tok: "tok",
   panelCostLabel: "Token-equivalent with cache",
   panelSavedLabel: "Cache saved",
-  panelCostCompare: (noCache, mult, dir) =>
+  panelCostCompare: (noCache, mult, dir, lessCanReverse = true) =>
     dir === "same"
       ? `without cache ≈ ${noCache} tok — about the same so far`
       : !mult
       ? `without cache ≈ ${noCache} tok`
       : dir === "more"
       ? `without cache ≈ ${noCache} tok — ~${mult}× more`
-      : `without cache ≈ ${noCache} tok — ~${mult}× less, so far`,
+      : `without cache ≈ ${noCache} tok — ~${mult}× less${lessCanReverse ? ", so far" : ""}`,
   panelCostWarmupHint:
     "The cache has not earned back what it cost yet. A cache write is charged at more than a fresh input " +
     "token (1-hour ×2.0, 5-minute ×1.25). While the premium those writes pay is bigger than what the " +
@@ -559,11 +571,12 @@ const RU: Messages = {
   codexPanelSavedLabel: "Сэкономлено кэшем",
   codexPanelNoCacheReadHint:
     "В этой сессии из кэша ещё ничего не читалось, поэтому оба числа одинаковые. " +
-    "Записи в кэш Codex считает отдельно, поэтому о том, что он уже мог сохранить, это ничего не говорит.",
+    "Для записей в кэш у Codex отдельный счётчик, поэтому о том, что он уже мог сохранить, это ничего не говорит.",
   codexPanelWriteNotCountedHint: (tokens) =>
-    `Codex сообщает ещё ${tokens} ток., записанных в кэш. В его протоколе не сказано, входят ли эти ` +
-    `токены уже в счётчик ввода, поэтому в число выше они не добавлены — чтобы не посчитать их дважды. ` +
-    `В строке «Детали» они показаны так, как их назвал Codex.`,
+    `Codex сообщает ещё ${tokens} ток., записанных в кэш. Этот счётчик — часть его счётчика ввода, а не ` +
+    `добавка к нему, поэтому в число выше эти токены уже входят и второй раз не прибавляются. Чего Codex ` +
+    `не сообщает — насколько они пересекаются со счётчиком чтения из кэша, поэтому и по другому весу они ` +
+    `не пересчитаны. В строке «Детали» они показаны ровно так, как их назвал Codex.`,
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
   codexPanelTokenCostNote:
@@ -618,7 +631,7 @@ const RU: Messages = {
     "Здесь показано, сколько токенов ушло на такие повторные загрузки. Пауза бывает вынужденной, " +
     "но оплачена она в любом случае — поэтому цифра показана как есть.",
   panelSubagentsRebuildNote:
-    "Обычно это агент, оставленный открытым, пока работает другой. После того, как его кэш отжил своё — у большинства агентов это пять минут, — он платит за повторную загрузку всего контекста, а это часто дороже, чем запустить нового агента с коротким заданием.",
+    "Пауза дольше срока жизни кэша — у большинства агентов это пять минут — заставляет агента загрузить весь свой контекст заново. Паузой может быть и агент, оставленный открытым, пока работает другой, и его собственная долгая команда — прогон тестов, сборка. В первом случае дешевле бывает запустить нового агента с коротким заданием.",
   subagentsRebuildFragment: (cost) => `${cost} на повторную загрузку после пауз`,
   panelSubagentsExpand: "Показать по агентам ▾",
   panelSubagentsCollapse: "Свернуть список агентов ▴",
@@ -643,7 +656,9 @@ const RU: Messages = {
     "0% значит, что расхода на ожидание у него не обнаружено — все паузы измерены, и ни одна ничего " +
     "не стоила; " +
     "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль. " +
-    "Цифра больше нуля — не вина агента: его кэш остыл, пока агента держали открытым.",
+    "Цифра больше нуля значит, что одна из пауз пережила его кэш. Чем была занята пауза, в журнале не " +
+    "написано: агента могли держать открытым, пока работал другой, а могла долго идти его собственная " +
+    "команда — прогон тестов, сборка.",
   panelAtLeastNote:
     "Знак ≥ значит, что цифра измерена не по всему журналу: часть пауз оценить не удалось, поэтому " +
     "настоящее число может быть больше, но не меньше.",
@@ -702,14 +717,14 @@ const RU: Messages = {
   tok: "ток",
   panelCostLabel: "Токен-эквивалент с кэшем",
   panelSavedLabel: "Сэкономлено кэшем",
-  panelCostCompare: (noCache, mult, dir) =>
+  panelCostCompare: (noCache, mult, dir, lessCanReverse = true) =>
     dir === "same"
       ? `без кэша было бы ≈ ${noCache} ток — пока примерно столько же`
       : !mult
       ? `без кэша было бы ≈ ${noCache} ток`
       : dir === "more"
       ? `без кэша было бы ≈ ${noCache} ток — в ~${mult}× больше`
-      : `без кэша было бы ≈ ${noCache} ток — пока в ~${mult}× меньше`,
+      : `без кэша было бы ≈ ${noCache} ток — ${lessCanReverse ? "пока " : ""}в ~${mult}× меньше`,
   panelCostWarmupHint:
     "Кэш пока не вернул того, что стоил. Запись в кэш дороже свежего входного токена (часовая ×2.0, " +
     "пятиминутная ×1.25). Пока эта надбавка за записи больше, чем экономия на чтениях, число с кэшем " +
