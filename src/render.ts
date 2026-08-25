@@ -527,7 +527,14 @@ function codexEconomy(
   dir: CostDirection;
   work: number;
   cachedInput: number;
+  /** Input priced at 1×: what is left after the cached reads and the writes. */
+  ordinaryInput: number;
   writeInput: number;
+  /** What the payload SAID, or null when it said nothing. Kept apart from
+   *  `writeInput` (what could be priced) because the ⓘ must not claim to have
+   *  priced a number the clamp cut down, and must not print a claim at all when
+   *  the provider stated none. */
+  writeStated: number | null;
 } | null {
   if (!details.usage) return null;
   const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
@@ -537,8 +544,13 @@ function codexEconomy(
   const cacheWriteWeight = details.weights?.cacheWrite ?? 1.25;
   const cachedInput = Math.max(0, details.usage.cachedInputTokens);
   const afterCached = Math.max(0, details.usage.inputTokens - cachedInput);
-  const statedWrite = Math.max(0, details.usage.cacheWriteInputTokens ?? 0);
-  const writeInput = Math.min(statedWrite, afterCached);
+  // `null` stays null all the way to the ⓘ: "the payload stated nothing" and
+  // "the payload stated zero" are different facts, and only the first of them
+  // makes the figure below a floor rather than a measurement.
+  const writeStated = details.usage.cacheWriteInputTokens == null
+    ? null
+    : Math.max(0, details.usage.cacheWriteInputTokens);
+  const writeInput = Math.min(writeStated ?? 0, afterCached);
   const freshInput = afterCached - writeInput;
   // Codex total_tokens = input_tokens + output_tokens; reasoning is a detail of output.
   const output = Math.max(0, details.usage.outputTokens);
@@ -553,7 +565,9 @@ function codexEconomy(
     ...costDirection(effective, noCache),
     work,
     cachedInput,
+    ordinaryInput: freshInput,
     writeInput,
+    writeStated,
   };
 }
 
@@ -1199,12 +1213,18 @@ export function buildPanelHtml(
     const rawShare = subTotal > 0 ? (reb.cost / subTotal) * 100 : 0;
     const rebShare = rebUnjudged ? Math.floor(rawShare) : Math.round(rawShare);
     const rebShareText = rebShare === 0 && reb.cost > 0 ? "<1" : String(rebShare);
-    const rebAtLeast = rebUnjudged && rebShare > 0;
+    // The marker follows the MEASUREMENT, not the printed percentage. A share
+    // that floors to "<1" is still a floor, and the token figure beside it is
+    // one too — dropping the ≥ there would present a bound as a measurement.
+    // "≥ <1%" reads as nonsense, so the share alone loses the marker while the
+    // tokens keep it, the same split the per-agent rows already make.
+    const rebAtLeast = rebUnjudged && reb.cost > 0;
+    const rebShareAtLeast = rebAtLeast && rebShare > 0;
     const rebuildRow = reb.show
       ? `<div class="sub">${hintSpan(
           m.panelSubagentsRebuild(
             `${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`,
-            `${rebAtLeast ? "≥" : ""}${rebShareText}%`
+            `${rebShareAtLeast ? "≥" : ""}${rebShareText}%`
           ),
           rebAtLeast ? `${m.panelSubagentsRebuildHint} ${m.panelAtLeastNote}` : m.panelSubagentsRebuildHint
         )}</div>`
@@ -1372,9 +1392,20 @@ export function buildCodexPanelHtml(
     // Codex states no cache TIER, so a write can only be priced by the
     // unstated-tier setting — which is why the two hints that name Claude's
     // tiers have Codex twins instead of being reused.
-    const statedWrite = codexCacheWrite(details);
+    // Three different facts, three different sentences — and the priced one
+    // quotes what was PRICED, never the raw count the clamp may have cut down.
     const writeNote =
-      statedWrite && statedWrite > 0 ? ` ${m.codexPanelWritePricedHint(fmtTokens(statedWrite))}` : "";
+      economy.writeStated == null
+        ? // Only worth saying where it could have changed the figure: with no
+          // ordinary input left, an unstated write count could not have moved it.
+          economy.ordinaryInput > 0
+          ? ` ${m.codexPanelWriteUnstatedHint}`
+          : ""
+        : economy.writeStated > economy.writeInput
+        ? ` ${m.codexPanelWriteClampedHint(fmtTokens(economy.writeStated), fmtTokens(economy.writeInput))}`
+        : economy.writeInput > 0
+        ? ` ${m.codexPanelWritePricedHint(fmtTokens(economy.writeInput))}`
+        : "";
     // Same ordering as `costCauseHint`, minus the "invisible difference" branch:
     // that one guards a footnote the Claude panel prints beside a comparison it
     // has already rounded, and this panel reaches it through the same

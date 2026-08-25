@@ -126,7 +126,7 @@ disappear with the list. The actionable half has to survive the fold.
 ### Panel — the lead's own idle time
 
 Reported in `Details` only, as a muted fragment, with no advice attached:
-`… · after-idle reloads 900k`. The owner stepping away is not a defect, and
+`… · reloads after pauses 900k`. The owner stepping away is not a defect, and
 the confounders there are real.
 
 ### Tooltip (hover) — one fragment, high bar

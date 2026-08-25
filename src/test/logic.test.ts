@@ -71,7 +71,7 @@ import {
   pickPlanned,
   shortModelLabel,
 } from "../model";
-import { buildCodexSnapshot, codexContext, codexWindowLabel, shortCodexModelLabel } from "../codexProvider";
+import { buildCodexSnapshot, codexTotals, codexContext, codexWindowLabel, shortCodexModelLabel } from "../codexProvider";
 import {
   CODEX_NOT_CONNECTED_DETAIL,
   isRecentProviderActivity,
@@ -769,7 +769,7 @@ test("buildView (ru): ok state shows tariff-only bar (dots + 5ч/7д), эфф in
   // cost-first headline: token-equivalent with-cache · without-cache · ×lower (4.6×)
   assert.match(v.tooltip, /токен-эквивалент с кэшем ≈ \*\*2\.5M\*\* · без кэша ≈ \*\*11\.2M\*\* \(в ~4\.6× меньше\)/);
   // muted technical breakdown line still present
-  assert.match(v.tooltip, /работа \(ввод\+вывод\) 200k · кэш: чтение 10M \/ запись 1M/);
+  assert.match(v.tooltip, /обычные ввод\+вывод 200k · кэш: чтение 10M \/ запись 1M/);
 });
 
 test("buildView (en): ok state, english bar + tooltip", () => {
@@ -783,7 +783,7 @@ test("buildView (en): ok state, english bar + tooltip", () => {
   assert.match(v.text, /🟢 5h 24%/);
   assert.match(v.text, /7d 41%/);
   assert.match(v.tooltip, /token-equivalent with cache ≈ \*\*2\.5M\*\* · without cache ≈ \*\*11\.2M\*\* \(~4\.6× lower\)/);
-  assert.match(v.tooltip, /work \(in\+out\) 200k · cache: read 10M \/ write 1M/);
+  assert.match(v.tooltip, /ordinary in\+out 200k · cache: read 10M \/ write 1M/);
   assert.match(v.tooltip, /Subscription quota/);
   assert.match(v.tooltip, /on track/);
 });
@@ -2520,7 +2520,7 @@ test("buildView: the lead's own reloads are stated in Details, with no advice at
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, undefined, { lead }
   );
-  assert.match(v.tooltip, /after-idle reloads 900k/, "RAW tokens, like every other figure on that line");
+  assert.match(v.tooltip, /reloads after pauses 900k/, "RAW tokens, like every other figure on that line");
   assert.ok(!/costs less/.test(v.tooltip), "the owner stepping away is not a defect");
 });
 
@@ -2944,9 +2944,9 @@ test("buildPanelHtml: the agent list folds away; the summary and the link never 
     undefined, undefined, undefined, subs, 1_000_000, undefined, true
   );
   assert.match(open, /implementer · Opus 5 · xhigh — Fix round R3/);
-  assert.match(open, /простой 25% \(≈ 500k\)/, "the percentage AND the tokens: 25% of a small agent is not worth acting on");
-  assert.match(open, /простой 0%/, "an agent that never waited says so");
-  assert.match(open, /простой — доля расхода самого агента/, "the cell explains itself once, under the list");
+  assert.match(open, /после пауз 25% \(≈ 500k\)/, "the percentage AND the tokens: 25% of a small agent is not worth acting on");
+  assert.match(open, /после пауз 0%/, "an agent that never waited says so");
+  assert.match(open, /после пауз — доля расхода самого агента/, "the cell explains itself once, under the list");
   assert.match(open, /Свернуть список агентов/);
 });
 
@@ -2955,9 +2955,9 @@ test("buildPanelHtml (en): the same list, the same two figures, in English", () 
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, [IDLE_AGENT], 1_000_000, undefined, true
   );
-  assert.match(open, /idle 25% \(≈ 500k\)/);
+  assert.match(open, /after pauses 25% \(≈ 500k\)/);
   assert.match(open, /Hide the agent list/);
-  assert.match(open, /idle — the share of that agent's own spend/);
+  assert.match(open, /after pauses — the share of that agent's own spend/);
 });
 
 test("buildPanelHtml: with no readable cache lifetime the idle column is not drawn at all", () => {
@@ -2980,8 +2980,8 @@ test("buildPanelHtml: one unreadable agent among readable ones gets a dash, neve
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, mixed, 1_000_000, undefined, true
   );
-  assert.match(html, /простой 25% \(≈ 500k\)/);
-  assert.match(html, /простой —/);
+  assert.match(html, /после пауз 25% \(≈ 500k\)/);
+  assert.match(html, /после пауз —/);
 });
 
 test("the panel's only command link cannot drift from package.json", () => {
@@ -3098,9 +3098,9 @@ test("buildPanelHtml: a zero built on an unjudged gap is a dash, not a 0%", () =
     [IDLE_AGENT, { ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 800_000, unjudged: 1 }) }],
     1_000_000, undefined, true
   );
-  assert.match(html, /простой 25% \(≈ 500k\)/);
-  assert.match(html, /простой —/);
-  assert.ok(!/простой 0%/.test(html));
+  assert.match(html, /после пауз 25% \(≈ 500k\)/);
+  assert.match(html, /после пауз —/);
+  assert.ok(!/после пауз 0%/.test(html));
 });
 
 test("addRebuild: the unjudged count survives being summed across agents", () => {
@@ -3174,12 +3174,12 @@ test("a measured-in-part idle figure is marked as a floor, never as the number",
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, [partial], 1_000_000, undefined, true
   );
-  assert.match(ru, /простой ≥ 25% \(≥ 500k\)/, "the real figure can only be higher, so the row says so");
+  assert.match(ru, /после пауз ≥ 25% \(≥ 500k\)/, "the real figure can only be higher, so the row says so");
   const en = buildPanelHtml(
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, [partial], 1_000_000, undefined, true
   );
-  assert.match(en, /idle ≥ 25% \(≥ 500k\)/);
+  assert.match(en, /after pauses ≥ 25% \(≥ 500k\)/);
   assert.match(en, /≥ marks a figure measured from part of the log only/, "the marker is explained where it appears");
   // …and the explanation is not shown when nothing carries the marker
   const exact = buildPanelHtml(
@@ -3224,8 +3224,8 @@ test("agentIdle: an agent that spent nothing has no share to state", () => {
     [IDLE_AGENT, { ...PATIENT_AGENT, effective: 0, rebuild: REB({}) }],
     1_000_000, undefined, true
   );
-  assert.match(html, /простой —/);
-  assert.ok(!/простой 0%/.test(html));
+  assert.match(html, /после пауз —/);
+  assert.ok(!/после пауз 0%/.test(html));
 });
 
 test("agentIdle: a sub-1% share with unjudged gaps states the tokens, not a bound both ways", () => {
@@ -3243,7 +3243,7 @@ test("agentIdle: a sub-1% share with unjudged gaps states the tokens, not a boun
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, [partial], 1_000_000, undefined, true
   );
-  assert.match(ru, /простой ≥ 3\.7k/, "3.75k floored, not rounded up");
+  assert.match(ru, /после пауз ≥ 3\.7k/, "3.75k floored, not rounded up");
   assert.ok(!/<1%/.test(ru));
 });
 
@@ -3253,13 +3253,13 @@ test("the lead's own reloads carry the same floor marker as the panel rows", () 
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, undefined, { lead: partial }
   );
-  assert.match(marked.tooltip, /after-idle reloads ≥ 900k/, "a quieter line is still a claim");
+  assert.match(marked.tooltip, /reloads after pauses ≥ 900k/, "a quieter line is still a claim");
   const full = REB({ tokens: 900_000, tokens1h: 900_000, cacheWrite: 5_000_000, streams: 1 });
   const exact = buildView(
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, undefined, { lead: full }
   );
-  assert.match(exact.tooltip, /after-idle reloads 900k/);
+  assert.match(exact.tooltip, /reloads after pauses 900k/);
   assert.ok(!/≥/.test(exact.tooltip));
 });
 
@@ -3420,7 +3420,7 @@ test("the lead's floored reload figure reads the same in Russian", () => {
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, undefined, { lead: partial }
   );
-  assert.match(ru.tooltip, /повторные загрузки после простоя ≥ 3\.7M/);
+  assert.match(ru.tooltip, /повторные загрузки после пауз ≥ 3\.7M/);
 });
 
 test("the ≥ carries its own definition where nothing else on the surface gives one", () => {
@@ -3889,6 +3889,84 @@ test("a Codex cache write is priced once, at the write weight, never as fresh in
   };
   // 0 ordinary + 3945 x 0.1 + 638 x 1.25 = 1192.
   assert.match(buildCodexPanelHtml(quota, now, "en", overlapping), /≈ 1\.2k/);
+});
+
+test("a write count Codex never stated is not read as a zero", () => {
+  // Round 17. `?? 0` collapsed two different facts. A payload that states no
+  // cache-write count is not a payload stating none were written: everything
+  // outside the cached reads is then priced as ordinary input, which is a floor,
+  // and the ⓘ has to say so or the figure claims a completeness it lacks.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const silent = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 0,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: null,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", silent);
+  assert.match(en, /write n\/a/);
+  assert.match(en, /stated no cache-write count for this session/);
+  assert.match(en, /the figure above is a floor/);
+  assert.ok(!/were written to cache/.test(en), "…the priced sentence, which would claim a measurement");
+  assert.match(buildCodexPanelHtml(quota, now, "ru", silent), /Счётчик записи в кэш Codex для этой сессии не сообщил/);
+
+  // A payload that states zero is a measurement, so it gets no floor warning.
+  const zero = { ...silent, usage: { ...silent.usage, cacheWriteInputTokens: 0 } };
+  assert.ok(!/is a floor/.test(buildCodexPanelHtml(quota, now, "en", zero)));
+});
+
+test("a write count too big for the input it breaks down says so, and prices what fits", () => {
+  // Round 17. The clamp was silent: with input 4583 / cached 3945 / write 4580
+  // only 638 tokens can be priced, but the ⓘ claimed all 4.6k were "counted
+  // once". And with no ordinary input at all it claimed to have priced tokens
+  // while pricing none.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const overlapping = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 4583, lastTokens: 4583,
+      inputTokens: 4583, cachedInputTokens: 3945,
+      outputTokens: 0, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 4580,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", overlapping);
+  assert.match(en, /stated 4\.6k tok written to cache, but only 638 tok/);
+  assert.ok(!/4\.6k tok were written to cache/.test(en), "…the claim that all of it was priced");
+  assert.match(buildCodexPanelHtml(quota, now, "ru", overlapping), /сообщил 4\.6k ток/);
+
+  // Nothing left to price at all: no sentence may claim otherwise.
+  const nothingLeft = {
+    ...overlapping,
+    usage: { ...overlapping.usage, totalTokens: 0, lastTokens: 0, inputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 10 },
+  };
+  const none = buildCodexPanelHtml(quota, now, "en", nothingLeft);
+  assert.ok(!/were written to cache/.test(none));
+  assert.match(none, /but only 0 tok/);
+});
+
+test("the provider snapshot and the panel price the same payload the same way", () => {
+  // Round 17. `codexTotals` is the exported abstraction; it kept the old
+  // arithmetic while the renderer moved on, so a consumer switching to it would
+  // have silently regressed to pricing writes as ordinary input.
+  const usage = {
+    total: {
+      totalTokens: 105_000, inputTokens: 100_000, cachedInputTokens: 40_000,
+      outputTokens: 5000, reasoningOutputTokens: 0, cacheWriteInputTokens: 12_000,
+    },
+    last: null,
+    modelContextWindow: null,
+  } as any;
+  const totals = codexTotals(usage);
+  // The three input buckets add up to exactly the 100k Codex reported.
+  assert.equal(totals.input + totals.cacheRead + totals.cacheWrite, 100_000);
+  assert.equal(totals.cacheWriteUnknown, totals.cacheWrite, "no tier is stated, so the write cannot claim one");
+  assert.equal(effectiveTokens(totals, W), 72_000, "the same 72k the panel prints");
 });
 
 test("the warm-up hint is Codex's own, because Codex has no cache tiers to name", () => {

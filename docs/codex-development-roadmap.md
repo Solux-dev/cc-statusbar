@@ -67,6 +67,15 @@ Codex runtime integration is not connected yet. The existing Claude Code
 status-bar behavior should remain unchanged until the provider resolver is
 explicitly wired into `extension.ts`.
 
+> **Status as of 25 August 2026 — the paragraph above is history, not the
+> current state.** Codex shipped: the provider is wired into `extension.ts`, it
+> has its own panel and hover, and quota, context, cache and the
+> token-equivalent all come from the app-server and local rollouts. What is
+> still true from the plan: `buildCodexSnapshot` / `ProviderSnapshot` in
+> `src/codexProvider.ts` remain the unused abstraction this roadmap proposed —
+> the shipped path reads `CodexQuotaDetails` directly. Test count is now 251,
+> not 48.
+
 ## Product Principles
 
 ### One Visible Source

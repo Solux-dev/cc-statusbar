@@ -72,21 +72,26 @@ export function codexQuotaWindow(w: CodexRateLimitWindow | null): QuotaWindow | 
 export function codexTotals(usage: CodexTokenUsage | null): Totals {
   const total = usage?.total;
   if (!total) return emptyTotals();
-  const input = Math.max(0, (total.inputTokens || 0) - (total.cachedInputTokens || 0));
+  const cacheRead = total.cachedInputTokens || 0;
+  const afterCached = Math.max(0, (total.inputTokens || 0) - cacheRead);
+  // The same three-bucket split `codexEconomy` uses, so the two never disagree
+  // about the same payload: OpenAI documents `input_tokens_details` as a
+  // BREAKDOWN of `input_tokens`, with `ordinary = input − cached − cache_write`.
+  // The write is clamped to what the reads leave, so the parts can never sum
+  // past the whole. Codex states no cache TIER, so the write lands in the
+  // unknown-lifetime bucket — the tiered ones stay 0, shown as unavailable
+  // rather than guessed.
+  const cacheWrite = Math.min(Math.max(0, total.cacheWriteInputTokens ?? 0), afterCached);
+  const input = afterCached - cacheWrite;
   const output = total.outputTokens || 0;
   return {
     ...emptyTotals(),
     input,
     output,
     work: input + output,
-    cacheRead: total.cachedInputTokens || 0,
-    // Codex DOES state a cache-write count, but it is a breakdown of
-    // `input_tokens` (see `codexAppServer.ts`), so those tokens are already
-    // inside `input` above and must not be counted a second time here. It also
-    // exposes no cache TIER, and never says how far the write count overlaps
-    // the cached-input count, so the tiered write buckets stay 0 — shown as
-    // unavailable, never guessed. The stated figure reaches the panel through
-    // `CodexQuotaDetails.usage.cacheWriteInputTokens`, not through this split.
+    cacheRead,
+    cacheWrite,
+    cacheWriteUnknown: cacheWrite,
   };
 }
 

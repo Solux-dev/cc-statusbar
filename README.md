@@ -141,7 +141,7 @@ Hover for the full breakdown (tooltip):
   (early in a session it can be the larger figure — a cache write is priced
   above a fresh token, and at the default weights later reads on the same cache
   narrow the gap).
-- **Details** (muted) — the raw numbers behind it: `work (in+out) · cache read /
+- **Details** (muted) — the raw numbers behind it: `ordinary in+out · cache read /
   write`.
 - **5h / 7d** real subscription quota: % used, colored bar, reset countdown,
   and a plain-language verdict (`on track` / `running tight` / `over pace`) —
@@ -199,7 +199,7 @@ deployments never merge into one row. Long lists are capped at 12 with the
 remainder stated — never a silent cut. Same numbers, one line, in the hover
 tooltip.
 
-Every agent row ends with **what waiting cost that agent**: `idle 31% (≈ 800k)`
+Every agent row ends with **what waiting cost that agent**: `after pauses 31% (≈ 800k)`
 — the share of its *own* spend that went on loading its context again after a
 pause, and the tokens behind that share. The percentage says how bad, the tokens
 say whether it is worth acting on: 31% of a small agent is a rounding error, 31%
@@ -567,9 +567,11 @@ The plugin has two parts with different reliability:
   history. If app-server is unavailable, the Codex tariff can temporarily show as
   unavailable; if token counters are not present yet, context/cache appear after
   the next Codex response. What Codex does not expose — the cache tier — is
-  shown as unavailable rather than guessed, and its cache-write counter is
-  displayed as stated rather than folded into a figure it may already be part
-  of.
+  shown as unavailable rather than guessed. Its cache-write counter is shown as
+  stated **and** priced in the token-equivalent, at the write weight: OpenAI
+  documents it as a part of the input count, so it is counted once rather than
+  twice. A payload that states no write count at all is not read as zero — the
+  figure is then a floor, and the ⓘ says so.
 
 **What the user does:** nothing. When the channel changes, a fix is released and
 — if installed from the Marketplace — **arrives as an automatic update**.

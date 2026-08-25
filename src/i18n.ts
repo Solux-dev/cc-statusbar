@@ -79,11 +79,20 @@ export interface Messages {
    *  `panelCostEvenHint`) are shared, not duplicated. */
   codexPanelWarmupHint: string;
   codexPanelBothHint: string;
-  /** Shown when Codex DOES state a non-zero cache-write count. Its protocol
-   *  documents no relationship between that counter and `input_tokens`, so the
-   *  figure above cannot absorb it without guessing — and a silent omission of
-   *  a number the provider states is exactly the wrong way to be wrong. */
+  /** Shown when tokens were actually PRICED as cache writes — never on the raw
+   *  count Codex stated, which the clamp may not have been able to apply in
+   *  full. `tokens` is therefore what went into the figure, not what the payload
+   *  said. The two states that differ from it have their own strings. */
   codexPanelWritePricedHint: (tokens: string) => string;
+  /** The stated count did not fit inside the input count once the cached reads
+   *  were taken out, so only part of it could be priced. Saying "N were counted
+   *  once" while pricing fewer would be a claim the arithmetic did not honour. */
+  codexPanelWriteClampedHint: (stated: string, priced: string) => string;
+  /** Codex stated NO cache-write count. Everything outside the cached reads is
+   *  then priced as ordinary input, which is a floor: had any of it been written
+   *  to cache, the true figure would be higher. `null` and `0` are different
+   *  facts, so this is not the same as a payload stating zero writes. */
+  codexPanelWriteUnstatedHint: string;
   codexLowerMult: (mult: string) => string;
   codexPanelUsageWaiting: string;
   codexPanelTokenCostNote: string;
@@ -243,10 +252,9 @@ export interface Messages {
    *  the wrong one invents a fact: `Warmup` when this session has written to
    *  cache (a write is priced above a fresh token and earns that back on later
    *  reads), `Weight` when it has not — then the only thing that can invert the
-   *  comparison is a `cacheReadWeight` set above 1. Codex never gets `Warmup`:
-   *  its write counter is a breakdown of its input count, not a separate charge,
-   *  so `codexEconomy` prices no write premium and a read weight above 1 is the
-   *  only thing that can invert the Codex comparison. */
+   *  comparison is a `cacheReadWeight` set above 1. Codex reaches the same two
+   *  states, but through `codexPanelWarmupHint` / `codexPanelBothHint`: it
+   *  states no cache lifetime, so the tiers named here do not exist there. */
   panelCostWarmupHint: string;
   panelCostWeightHint: string;
   /** …and the third case: no cache activity at all, so the two figures are the
@@ -338,9 +346,17 @@ const EN: Messages = {
     "against reading the same input fresh. At its default (0.1) it would.",
   codexPanelWritePricedHint: (tokens) =>
     `Of the input above, ${tokens} tok were written to cache. OpenAI documents that counter as a part ` +
-    `of the input count rather than an extra beside it, so those tokens are counted once — at the write ` +
-    `weight instead of as ordinary fresh input, which is dearer than a fresh token and is what a warm-up ` +
-    `costs. The Details line shows the figure exactly as Codex stated it.`,
+    `of the input count rather than an extra beside it, so those tokens are counted once — at your ` +
+    `\`ccStatusbar.cacheWriteWeight\` instead of as ordinary fresh input. The Details line shows the ` +
+    `count exactly as Codex stated it.`,
+  codexPanelWriteClampedHint: (stated, priced) =>
+    `Codex stated ${stated} tok written to cache, but only ${priced} tok of its input count are left ` +
+    `once the cached reads are taken out, so ${priced} is all this figure could price. A breakdown ` +
+    `larger than the total it breaks down cannot be applied in full.`,
+  codexPanelWriteUnstatedHint:
+    "Codex stated no cache-write count for this session, so every input token outside the cached ones " +
+    "is priced as ordinary input. If some of it was in fact written to cache, the figure above is a " +
+    "floor — a write is priced by your `ccStatusbar.cacheWriteWeight`, not at the ordinary rate.",
   codexLowerMult: (mult) => `(~${mult}× lower)`,
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
   codexPanelTokenCostNote:
@@ -353,7 +369,7 @@ const EN: Messages = {
   codexCacheHitLine: (pct) => `input from cache: ${pct}`,
   codexCacheTierUnavailable: "n/a",
   codexDetailsLine: (work, cacheRead, cacheWrite) =>
-    `work (input+output) ${work} · cache: read ${cacheRead} / write ${cacheWrite ?? "n/a"}`,
+    `ordinary in+out ${work} · cache: read ${cacheRead} / write ${cacheWrite ?? "n/a"}`,
   codexDetailsWaitingLine: "Token details will appear after the next Codex response.",
   diagnosticsHeader: "**Diagnostics:**",
   noFolder: "$(pulse) cc: no folder",
@@ -402,21 +418,21 @@ const EN: Messages = {
   panelAgentIdle: (pct, cost, atLeast) =>
     pct && cost
       ? atLeast
-        ? `idle ≥ ${pct}% (≥ ${cost})`
-        : `idle ${pct}% (≈ ${cost})`
+        ? `after pauses ≥ ${pct}% (≥ ${cost})`
+        : `after pauses ${pct}% (≈ ${cost})`
       : pct
       ? atLeast
-        ? `idle ≥ ${pct}%`
-        : `idle ${pct}%`
+        ? `after pauses ≥ ${pct}%`
+        : `after pauses ${pct}%`
       : cost
       ? atLeast
-        ? `idle ≥ ${cost}`
-        : `idle ≈ ${cost}`
-      : "idle —",
-  panelAgentIdleUnknown: "idle —",
+        ? `after pauses ≥ ${cost}`
+        : `after pauses ≈ ${cost}`
+      : "after pauses —",
+  panelAgentIdleUnknown: "after pauses —",
   agentFallbackName: "agent",
   panelAgentIdleLegend:
-    "idle — the share of that agent's own spend that went on loading its context again after a pause. " +
+    "after pauses — the share of that agent's own spend that went on loading its context again after a pause. " +
     "0% means no waiting cost was measured for it — every pause it took was judged, and none of them " +
     "priced to anything; " +
     "a dash means the log did not allow the measurement, which is a different thing from zero. " +
@@ -427,7 +443,7 @@ const EN: Messages = {
     "≥ marks a figure measured from part of the log only: some pauses could not be judged, so the real " +
     "number can be higher, never lower.",
   atLeastShort: "≥ = measured from part of the log; the real figure can be higher, never lower",
-  detailsRebuild: (tokens) => `after-idle reloads ${tokens}`,
+  detailsRebuild: (tokens) => `reloads after pauses ${tokens}`,
   title: "**Claude Code — session usage**",
   costCompact: (withCache, noCache, mult, dir) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
@@ -439,7 +455,7 @@ const EN: Messages = {
       ? ` (~${mult}× lower)`
       : ` (~${mult}× higher so far)`),
   detailsLine: (work, cacheRead, cacheWrite) =>
-    `work (in+out) ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
+    `ordinary in+out ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
   contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
   contextNoLimit: (used, detail) => `context: ${used} (limit n/a${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "context limit unavailable",
@@ -618,9 +634,17 @@ const RU: Messages = {
     "При значении по умолчанию (0.1) — экономило бы.",
   codexPanelWritePricedHint: (tokens) =>
     `Из ввода выше ${tokens} ток. записаны в кэш. В документации OpenAI этот счётчик — часть счётчика ` +
-    `ввода, а не добавка к нему, поэтому эти токены посчитаны один раз: по весу записи, а не как обычный ` +
-    `свежий ввод. Запись дороже свежего токена — это и есть цена прогрева. В строке «Детали» число ` +
-    `показано ровно так, как его назвал Codex.`,
+    `ввода, а не добавка к нему, поэтому эти токены посчитаны один раз: по вашему параметру ` +
+    `\`ccStatusbar.cacheWriteWeight\`, а не как обычный ввод. В строке «Детали» число показано ровно ` +
+    `так, как его назвал Codex.`,
+  codexPanelWriteClampedHint: (stated, priced) =>
+    `Codex сообщил ${stated} ток., записанных в кэш, но после вычета чтений из кэша в его счётчике ` +
+    `ввода остаётся только ${priced} ток. — столько это число и смогло оценить. Часть не может быть ` +
+    `больше целого, из которого её выделяют.`,
+  codexPanelWriteUnstatedHint:
+    "Счётчик записи в кэш Codex для этой сессии не сообщил, поэтому весь ввод сверх прочитанного из " +
+    "кэша оценён как обычный. Если часть его всё-таки записывалась в кэш, число выше — нижняя граница: " +
+    "запись считается по вашему параметру `ccStatusbar.cacheWriteWeight`, а не по обычной ставке.",
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
   codexPanelTokenCostNote:
@@ -633,7 +657,7 @@ const RU: Messages = {
   codexCacheHitLine: (pct) => `ввод из кэша: ${pct}`,
   codexCacheTierUnavailable: "н/д",
   codexDetailsLine: (work, cacheRead, cacheWrite) =>
-    `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite ?? "н/д"}`,
+    `обычные ввод+вывод ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite ?? "н/д"}`,
   codexDetailsWaitingLine: "Детали по токенам появятся после следующего ответа Codex.",
   diagnosticsHeader: "**Диагностика:**",
   noFolder: "$(pulse) cc: нет папки",
@@ -682,21 +706,21 @@ const RU: Messages = {
   panelAgentIdle: (pct, cost, atLeast) =>
     pct && cost
       ? atLeast
-        ? `простой ≥ ${pct}% (≥ ${cost})`
-        : `простой ${pct}% (≈ ${cost})`
+        ? `после пауз ≥ ${pct}% (≥ ${cost})`
+        : `после пауз ${pct}% (≈ ${cost})`
       : pct
       ? atLeast
-        ? `простой ≥ ${pct}%`
-        : `простой ${pct}%`
+        ? `после пауз ≥ ${pct}%`
+        : `после пауз ${pct}%`
       : cost
       ? atLeast
-        ? `простой ≥ ${cost}`
-        : `простой ≈ ${cost}`
-      : "простой —",
-  panelAgentIdleUnknown: "простой —",
+        ? `после пауз ≥ ${cost}`
+        : `после пауз ≈ ${cost}`
+      : "после пауз —",
+  panelAgentIdleUnknown: "после пауз —",
   agentFallbackName: "агент",
   panelAgentIdleLegend:
-    "простой — доля расхода самого агента, ушедшая на повторную загрузку его контекста после паузы. " +
+    "после пауз — доля расхода самого агента, ушедшая на повторную загрузку его контекста после паузы. " +
     "0% значит, что расхода на ожидание у него не обнаружено — все паузы измерены, и ни одна ничего " +
     "не стоила; " +
     "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль. " +
@@ -707,7 +731,7 @@ const RU: Messages = {
     "Знак ≥ значит, что цифра измерена не по всему журналу: часть пауз оценить не удалось, поэтому " +
     "настоящее число может быть больше, но не меньше.",
   atLeastShort: "≥ — измерено не по всему журналу; настоящее число может быть больше, но не меньше",
-  detailsRebuild: (tokens) => `повторные загрузки после простоя ${tokens}`,
+  detailsRebuild: (tokens) => `повторные загрузки после пауз ${tokens}`,
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult, dir) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
@@ -719,7 +743,7 @@ const RU: Messages = {
       ? ` (в ~${mult}× меньше)`
       : ` (пока в ~${mult}× больше)`),
   detailsLine: (work, cacheRead, cacheWrite) =>
-    `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
+    `обычные ввод+вывод ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
   contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
   contextNoLimit: (used, detail) => `контекст: ${used} (лимит н/д${detail ? ` — ${detail}` : ""})`,
   contextLimitUnavailable: "лимит контекста недоступен",

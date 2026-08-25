@@ -8,7 +8,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - **What waiting cost each agent, agent by agent.** The delegated-work list now
-  ends every row with `idle 31% (≈ 800k)` — the share of *that agent's own*
+  ends every row with `after pauses 31% (≈ 800k)` — the share of *that agent's own*
   spend that went on loading its context again after a pause, and the tokens
   behind the share. The percentage says how bad, the tokens say whether it is
   worth changing anything: 31% of a small agent is a rounding error, 31% of a
@@ -62,7 +62,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   context window printed “model context window unavailable”, and an agent whose
   type the transcript never named printed “agent”, both in Russian panels. Both
   now follow the interface language.
-- **The `idle` column blamed the wrong thing.** Its legend read “a figure above
+- **The reload column blamed the wrong thing.** Its legend read “a figure above
   zero is not the agent's doing: its cache went cold while it was left open”,
   and the advice line under the list opened “usually an agent left open while
   another one works”. What the extension actually measures is a gap between two
@@ -105,6 +105,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   full note hangs off the delegated-work section, which can be absent entirely,
   while the lead's own reloads appear in `Details` regardless and the hover has
   no ⓘ at all. Both now carry the rule in one clause.
+- **The column is no longer called “idle”, because that is not what it
+  measures.** A row now reads `after pauses 31% (≈ 800k)` (RU: «после пауз»),
+  and the lead's line in `Details` reads `reloads after pauses`. Rounds 15 and
+  16 corrected the explanation under the figure but left the label itself
+  asserting the cause: an agent that spent ten minutes running a test suite was
+  headed `idle 34%`. The label now says what the measurement is — a pause the
+  cache did not survive.
+- **A cache-write count Codex never stated was read as a zero.** `null` and `0`
+  are different facts and the Details line already printed them differently, but
+  the token-equivalent treated both as “no writes”, so a payload that simply
+  omits the counter — 40,498 of the 95,371 events on this machine — silently
+  priced everything outside the cached reads as ordinary input. The figure is
+  now marked as a floor in the ⓘ when the counter is absent. And where the
+  stated count does not fit inside the input it breaks down, the ⓘ says how much
+  could be priced instead of claiming the whole of it was.
+- **`ordinary in+out`, not `work (in+out)`.** The Details bucket has always
+  excluded what came from cache; with Codex writes now priced separately it
+  excludes those too. Calling it `in+out` beside a `cache: read / write` that is
+  also input made the labels contradict each other.
+- **The provider snapshot still used the old Codex arithmetic.**
+  `codexTotals()` in `src/codexProvider.ts` — the exported abstraction — priced
+  writes as ordinary input while the renderer priced them properly, so the same
+  payload gave 69k through one path and 72k through the other. Both now use the
+  same three-bucket split.
+- **A lower bound below 1% lost its marker.** With unjudged gaps and a measured
+  0.6% share the summary printed `≈ 1.3M (<1%)`, presenting a floor as a
+  measurement. The token figure keeps its `≥` now; only the percentage drops it,
+  because `≥ <1%` says nothing.
 - **Two published numbers overstated what was measured.** “Over half of
   everything subagents write to cache” is 48% across the 505 agent logs measured
   here (114.4M reload tokens against 236.8M written); it reaches 54% only once
