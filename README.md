@@ -3,17 +3,23 @@
 [![VS Marketplace](https://img.shields.io/badge/VS%20Marketplace-cc--statusbar-007ACC?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=solux-dev.cc-statusbar)
 [![Open VSX](https://img.shields.io/open-vsx/v/solux-dev/cc-statusbar?label=Open%20VSX)](https://open-vsx.org/extension/solux-dev/cc-statusbar)
 
-A VS Code status-bar item for **Claude Code** and **Codex** usage: real
-5-hour / 7-day quota when the provider exposes it, context-window fill, cache
-signals, and a cache-weighted token-equivalent breakdown — colour-coded, at a
-glance, without leaving the editor.
+**Your quota runs out in the middle of a task, and the reset is three hours
+away.** Nothing warned you it was coming, and nothing tells you what spent it.
 
-Claude Code keeps the full local-transcript experience: quota, context, cache
-tier, cache hit rate, and token details. Codex uses its local app-server and
-rollout history for quota, context, cached input, token details, and now the
-active **model + reasoning effort**. In **Auto**, the bar follows whichever
-provider is actually active in the workspace instead of being held by an old
-session.
+This extension keeps that answer in the status bar: how much of your 5-hour and
+7-day window is already gone, whether the pace you are working at still fits
+before the reset, and how full the context window is — colour-coded, at a
+glance, without leaving the editor. Hover it, or dock the panel, and it also
+says *where* the tokens went: which subagent, on which model, and how much of
+the total was a cache being rebuilt after a pause.
+
+It works with **Claude Code** and **Codex** in one status-bar item, with no
+setup. In **Auto** the bar follows whichever provider is actually active in the
+workspace, so a finished Claude transcript no longer holds the line while Codex
+is running. Claude Code gets the full local-transcript picture — quota, context,
+cache tier, cache hit rate, token details. Codex reports quota, context, cached
+input, token details and the active **model + reasoning effort** from its local
+app-server and rollout history.
 
 **Install:** search **“Claude/Codex Usage”** in the VS Code Extensions
 view, use [Open VSX](https://open-vsx.org/extension/solux-dev/cc-statusbar) for
@@ -28,6 +34,24 @@ The collapsed bar lives at the bottom-right of the status bar; hover it for the
 full breakdown shown above. Want to keep it open? Click **“⤢ Open panel”** in
 the tooltip (or run *“Claude/Codex Statusbar: Open usage panel”*) to dock a
 **live-updating** panel that stays until you close it.
+
+## How this differs from the other usage bars
+
+Compared against the six most-installed alternatives —
+`claude-code-usage-tracker`, `ccusage-vscode`, `claudemeter`,
+`claude-monkey-bar`, `vscode-codex-usage` and `claude-state-bar` — with each
+project's own README as the source, checked 25 August 2026. Four things this one
+does that they do not:
+
+| | cc-statusbar | The others |
+|---|---|---|
+| **Cache economy** | Reads the prompt-cache tier from the transcript — 1 hour or 5 minutes — and prices each cache write at the tier its own turn states (a turn that states none is priced by a setting, not by a guess), then adds a line for what pausing costs: a cache goes cold and the whole context is loaded again. | None of the six tells one cache lifetime from another. The closest, `ccusage-vscode`, prices cache tokens only to reach a total in dollars. |
+| **Delegated work as spend** | What each subagent spent, grouped by model and reasoning effort, most expensive first, with the nesting depth that says who chose to spend it. | None of the six attributes spend to the agent that spent it. `claude-state-bar` monitors running agents, which answers *who is working now* — not *what that work cost*. |
+| **Quota from four independent sources** | The account usage payload, a passive statusLine bridge, a header poll, and Claude Code's own on-disk copy. The freshest valid reading wins, so one channel breaking stays invisible, and a stale reading is always shown with its age. | `claude-code-usage-tracker` reads one channel — its own README says "all data comes from the Anthropic API… no local JSONL parsing or file watching is involved" — and `claudemeter` likewise one; `claude-state-bar` also one, and only after you set it up by hand. There is no second source to fall back on. |
+| **Both providers, zero setup** | Claude Code and Codex in the same item, through the logins both tools already have on the machine. | `vscode-codex-usage` covers Codex only; four of the others cover Claude Code only. `claude-state-bar` covers both — after you copy a `sessionKey` and an Org ID out of your browser's DevTools. |
+
+The interface is also fully **Russian** as well as English, following the
+editor's display language.
 
 ## What it shows
 
@@ -111,8 +135,10 @@ Hover for the full breakdown (tooltip):
 
 - **token-equivalent** (the headline) — `with cache ≈ 4.7M · without cache ≈ 32M
   (~6.8× lower)`: a normalized estimate from real token counters, showing how
-  much cache reuse reduced the token load compared with re-reading everything
-  fresh.
+  cache reuse changed the token load compared with re-reading everything fresh
+  (early in a session it can be the larger figure — a cache write is priced
+  above a fresh token, and at the default weights later reads on the same cache
+  narrow the gap).
 - **Details** (muted) — the raw numbers behind it: `work (in+out) · cache read /
   write`.
 - **5h / 7d** real subscription quota: % used, colored bar, reset countdown,
@@ -160,12 +186,32 @@ the Lead, or another agent when nesting goes deeper. Open the panel for a
 ![The panel's delegated-work section](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=1)
 
 Spend grouped by model+effort first (the answer to *"which models did it hand my
-work to, and what did that cost"*), then the individual agents **most expensive
-first** with their type, model, effort, token-equivalent and task description —
-ordering by recency could hide the biggest spender below the cut. Grouping keys
-on the raw model id, so two different deployments never merge into one row. Long
-lists are capped at 12 with the remainder stated — never a silent cut. Same
-numbers, one line, in the hover tooltip.
+work to, and what did that cost"*), and behind **“Show each agent ▾”** the
+individual agents **most expensive first** with their type, model, effort,
+token-equivalent and task description — ordering by recency could hide the
+biggest spender below the cut. The list stays folded until you ask for it (your
+choice is remembered), so a session with dozens of agents cannot push the rest
+of the page out of sight. Grouping keys on the raw model id, so two different
+deployments never merge into one row. Long lists are capped at 12 with the
+remainder stated — never a silent cut. Same numbers, one line, in the hover
+tooltip.
+
+Every agent row ends with **what waiting cost that agent**: `idle 31% (≈ 800k)`
+— the share of its *own* spend that went on loading its context again after a
+pause, and the tokens behind that share. The percentage says how bad, the tokens
+say whether it is worth acting on: 31% of a small agent is a rounding error, 31%
+of a large one is a reason to close the agent instead of leaving it open through
+a long review. `0%` is a real answer — no waiting cost was measured for that
+agent: every pause it took was judged, and none of them priced to anything. When
+the log does not allow that measurement (its cache lifetime is never stated, or a
+turn cannot be placed in time) the row shows `—`, never a zero: "we cannot tell"
+and "it never waited" are different answers. If *none* of the listed agents can
+be measured, the column is left out altogether rather than filling the list with
+dashes. Where part of a log could be measured and part could not, the figure is
+marked `≥` — a floor, truncated rather than rounded, so it never claims more than
+was measured. On 500 real agent logs measured here, 99% carried a
+number and 1% showed the dash. It is not the agent's doing either way — the
+cache went cold while it was left open.
 
 Agents spawned by *another* agent rather than by the Lead are marked `depth N`
 (real and common — nesting reaches depth 5 in practice), so the breakdown says
@@ -175,12 +221,14 @@ This is not cosmetic: those tokens count against your quota, and nothing else
 shows where they went. If a research errand does not need an expensive model,
 name the model you want in the task itself.
 
-**What waiting costs.** While an agent sits idle its cache goes cold — 5 minutes
-for a subagent, 1 hour for the main session. After a long enough pause it loads
+**What waiting costs.** While an agent sits idle its cache goes cold — usually 5
+minutes for a subagent, an hour for the main session, though each stream's own
+lifetime is read from its transcript rather than assumed. After a long enough pause it loads
 its whole context again and pays for that as a new cache write. On the sessions
 measured here that is **over half** of everything subagents write to cache, so
 the section adds one line when it is worth your attention: *"of that, ≈ 6M went
-on reloading context after pauses — an agent's cache stays warm for 5 minutes"*.
+on reloading context after pauses — an agent's cache usually stays warm for 5
+minutes"*.
 It appears only above a threshold (at least 1M tokens **and** 3% of the
 session), it is never coloured, and the status bar gains nothing — this is
 information, not a quota with consequences. The detection looks at a **pair**,
@@ -218,7 +266,7 @@ to look anything up:
   the session, never assumed. It tells you how long your prompt cache survives
   while you're idle: on a subscription within its plan limit it's **1 hour**
   (stepping away for up to an hour stays cheap); an API key, paid usage past
-  your plan limit, or subagents run at **5 minutes** (short breaks rebuild the
+  your plan limit, or (usually) a subagent run at **5 minutes** (short breaks rebuild the
   cache and cost more). Check it once to know how long a break you can take —
   you don't need to watch it.
 - **Input from cache — e.g. `95%`.** The share of your prompt served from cache

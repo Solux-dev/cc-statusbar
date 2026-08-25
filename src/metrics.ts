@@ -261,9 +261,6 @@ export interface AgentDigest {
   totals: Totals;
   /** ms timestamp of the last turn — used to order the list newest-first. */
   lastTurnMs: number;
-  /** This agent's own cache tier, READ from its turns (agents run at 5m in
-   *  practice, but an assumed TTL is exactly what the spec forbids). */
-  tier: CacheTier;
   /** What this agent's own idle gaps cost. Computed here so the transcript
    *  cache (mtime+size keyed) covers it too — an agent log is append-only and
    *  most are finished, so re-scanning every one on every tick is pure waste. */
@@ -297,7 +294,9 @@ export function agentDigest(raw: string): AgentDigest {
     effort,
     totals: sumTranscript(raw, true),
     lastTurnMs,
-    tier: lastCacheTier(raw, true),
+    // No tier here: what the UI needs is `rebuild` (which reads the tier per gap
+    // itself), and scanning the whole log a second time for a value nobody reads
+    // costs a full pass over every agent file whenever one of them changes.
     rebuild: idleRebuildOf(raw, true),
   };
 }
@@ -380,10 +379,20 @@ export interface IdleRebuild {
   cacheWrite: number;
   /** How many streams contained at least one reload (0 or 1 for the lead). */
   streams: number;
+  /** Gaps we could NOT judge: a turn we cannot place in time (missing or
+   *  backwards timestamp), or one reached before any write stated a cache
+   *  lifetime, so there is no TTL to measure the pause against.
+   *
+   *  Why it has to be carried: a zero above is otherwise ambiguous. "No reload
+   *  was counted" means "it never waited" ONLY when every gap was judgeable —
+   *  with an unjudged gap it means "we cannot tell", and a UI that prints 0%
+   *  for the second case invents a fact. Absence of evidence, not evidence of
+   *  absence. */
+  unjudged: number;
 }
 
 export function emptyRebuild(): IdleRebuild {
-  return { tokens: 0, tokens1h: 0, tokens5m: 0, tokensUnknown: 0, cacheWrite: 0, streams: 0 };
+  return { tokens: 0, tokens1h: 0, tokens5m: 0, tokensUnknown: 0, cacheWrite: 0, streams: 0, unjudged: 0 };
 }
 
 export function addRebuild(a: IdleRebuild, b: IdleRebuild): IdleRebuild {
@@ -394,6 +403,7 @@ export function addRebuild(a: IdleRebuild, b: IdleRebuild): IdleRebuild {
     tokensUnknown: a.tokensUnknown + b.tokensUnknown,
     cacheWrite: a.cacheWrite + b.cacheWrite,
     streams: a.streams + b.streams,
+    unjudged: a.unjudged + b.unjudged,
   };
 }
 
@@ -432,6 +442,9 @@ export function idleRebuildOf(raw: string, includeSidechain = false): IdleRebuil
   let liveTier: CacheTier = null;
   /** Timestamp of the previous turn, or null when the chain is broken. */
   let prevTs: number | null = null;
+  /** Counted turns so far. Every turn after the first sits at the end of a gap,
+   *  which is what makes an unjudged one worth recording (see `unjudged`). */
+  let turns = 0;
   const seen = new Set<string>();
 
   for (const line of raw.split(/\r?\n/)) {
@@ -460,6 +473,10 @@ export function idleRebuildOf(raw: string, includeSidechain = false): IdleRebuil
     out.cacheWrite += write;
 
     const ts = Date.parse(obj.timestamp || "");
+    /** Could the gap ENDING at this turn be judged at all? Both ends have to be
+     *  placeable in time, and a TTL has to be known to measure the pause
+     *  against. Anything else is recorded as unjudged rather than as zero. */
+    let judged = false;
     if (Number.isNaN(ts)) {
       prevTs = null; // barrier: this turn happened, we just cannot place it
     } else if (prevTs != null && ts <= prevTs) {
@@ -469,14 +486,19 @@ export function idleRebuildOf(raw: string, includeSidechain = false): IdleRebuil
       prevTs = null;
     } else {
       const gapSec = prevTs == null ? 0 : (ts - prevTs) / 1000;
-      if (liveTier && prevTs != null && gapSec > CACHE_TTL_SECONDS[liveTier]) {
-        out.tokens += write;
-        out.tokens1h += split.h1;
-        out.tokens5m += split.m5;
-        out.tokensUnknown += split.unknown;
+      if (liveTier && prevTs != null) {
+        judged = true;
+        if (gapSec > CACHE_TTL_SECONDS[liveTier]) {
+          out.tokens += write;
+          out.tokens1h += split.h1;
+          out.tokens5m += split.m5;
+          out.tokensUnknown += split.unknown;
+        }
       }
       prevTs = ts;
     }
+    if (turns > 0 && !judged) out.unjudged += 1;
+    turns += 1;
 
     const tier = tierOfWrite(usage);
     if (tier) liveTier = tier;
@@ -499,18 +521,57 @@ export function addTotals(a: Totals, b: Totals): Totals {
   };
 }
 
-export function fmtTokens(n: number): string {
+export function fmtTokens(n: number, floor = false): string {
   // one decimal, but drop a trailing ".0" → "1M" not "1.0M", "468k" not "468.0k".
+  //
+  // `floor` truncates that decimal instead of rounding it. It is for figures
+  // printed as "≥ X": rounding 3.75M up to "3.8M" turns a true lower bound into
+  // a false one — the number claimed would be above the number measured.
   const f = (v: number, suf: string): string => {
-    const s = v.toFixed(1);
+    const s = (floor ? Math.floor(v * 10) / 10 : v).toFixed(1);
     return (s.endsWith(".0") ? s.slice(0, -2) : s) + suf;
   };
   if (n >= 1_000_000) return f(n / 1_000_000, "M");
   if (n >= 1_000) return f(n / 1_000, "k");
-  return String(Math.round(n));
+  // Below 1k the same rule applies: a floor rounds DOWN, or "≥ 1000" could be
+  // printed for a measured 999.5.
+  return String(floor ? Math.floor(n) : Math.round(n));
 }
 
 /** Savings multiplier (noCache / effective) → "6.8", "7" (drops trailing ".0"). */
+/** Which way the with-cache/without-cache comparison actually points, and by how
+ *  much. Never assume "the cache saved you something": early in a session it has
+ *  not. A 1-hour cache WRITE is priced at 2× a fresh input token and nothing has
+ *  been read back from it yet, so a first turn that only writes really is more
+ *  expensive than doing the same work with no cache at all — the saving arrives
+ *  with the reads that follow. Stating "N× more" there is simply false.
+ *
+ *  "same" covers the break-even case AND anything that rounds to 1×, so the UI
+ *  never prints "~1× more" for two numbers it cannot tell apart. Pure. */
+export type CostDirection = "more" | "same" | "less";
+export function costDirection(
+  effective: number,
+  noCache: number
+): { dir: CostDirection; mult: string | null } {
+  // A ratio needs both sides. With one of them at zero the direction is still
+  // knowable — "one is more than nothing" — but the multiplier is not, so it is
+  // returned as null and every surface then simply omits it. Reporting "same"
+  // here (as the first version did) would state the opposite of the arithmetic.
+  if (effective <= 0 && noCache <= 0) return { dir: "same", mult: null };
+  if (effective <= 0) return { dir: "more", mult: null };
+  if (noCache <= 0) return { dir: "less", mult: null };
+  const bigger = Math.max(effective, noCache);
+  const smaller = Math.min(effective, noCache);
+  const mult = fmtMult(bigger / smaller);
+  // Anything that rounds to 1× is presented as "about the same": printing
+  // "~1× more" for two numbers the display cannot tell apart is not a
+  // statement. NOTE for callers: this is a PRESENTATION state, not the sign.
+  // Anything that reasons about who is bigger (e.g. whether the cache has
+  // earned back what it cost) must compare the numbers, not read this field.
+  if (mult === "1") return { dir: "same", mult };
+  return { dir: noCache > effective ? "more" : "less", mult };
+}
+
 export function fmtMult(x: number): string {
   const s = x.toFixed(1);
   return s.endsWith(".0") ? s.slice(0, -2) : s;

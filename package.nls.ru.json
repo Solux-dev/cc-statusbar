@@ -3,6 +3,7 @@
   "ccStatusbar.cmd.toggleQuota": "Claude/Codex Statusbar: вкл/выкл опрос тарифа 5ч/7д",
   "ccStatusbar.cmd.switchLanguage": "Claude/Codex Statusbar: сменить язык",
   "ccStatusbar.cmd.openPanel": "Claude/Codex Statusbar: открыть панель расхода",
+  "ccStatusbar.cmd.toggleDelegated": "Claude/Codex Statusbar: показать/скрыть список агентов в панели",
   "ccStatusbar.cmd.selectProvider": "Claude/Codex Statusbar: выбрать провайдера",
   "ccStatusbar.cmd.useAuto": "Claude/Codex Statusbar: использовать авто-режим",
   "ccStatusbar.cmd.useClaude": "Claude/Codex Statusbar: использовать Claude Code",

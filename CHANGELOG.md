@@ -7,6 +7,24 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **What waiting cost each agent, agent by agent.** The delegated-work list now
+  ends every row with `idle 31% (≈ 800k)` — the share of *that agent's own*
+  spend that went on loading its context again after a pause, and the tokens
+  behind the share. The percentage says how bad, the tokens say whether it is
+  worth changing anything: 31% of a small agent is a rounding error, 31% of a
+  large one is a reason to close an agent instead of leaving it open through a
+  long review. `0%` means no waiting cost was measured for that agent: every
+  pause it took was judged, and none of them priced to anything — an answer, not
+  a gap. Where the log does not allow the measurement (no cache lifetime stated,
+  a turn that cannot be placed in time) the row shows `—`, because a zero there
+  would be an invention: on 500 real agent logs that was 1% of them, and when no
+  listed agent can be measured the column is left out altogether. Where part of a log could be measured and part
+  could not, the figure is marked `≥` — a floor, never presented as the number,
+  and floors are truncated rather than rounded, so `≥` never claims more than
+  was actually measured. The summary line
+  above the list now carries the same share for all agents together, so a row
+  can be read against it. Both figures come from data the extension already
+  parsed, so the list costs nothing extra.
 - **A way back to the project.** Both hovers and both panels now end with
   **“Report an issue”** (RU: «Сообщить о проблеме»), linking to the GitHub issue
   tracker. Until now the extension pointed nowhere: almost everyone installs it
@@ -24,6 +42,44 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **What the cache is doing for you is now on the page, not under a hover.** The
+  panel shows `without cache ≈ 110.5M tok — ~7.9× more` as a plain line under
+  the headline number (RU: «без кэша было бы …»). It is the one figure that says
+  what cache reuse is worth, and anyone who never hovers used to miss it
+  entirely. Only the derived total (“Cache saved”, the difference between the
+  two visible numbers) and the not-a-money-price disclaimer stay in the ⓘ. Same
+  change in the Codex panel — switching provider must not move a number the
+  reader has learned to look for.
+- **The comparison now states the direction it actually measures.** Early in a
+  session the cache has *not* saved you anything yet: a 1-hour cache write is
+  priced at 2× a fresh input token and nothing has been read back from it, so
+  the with-cache figure can legitimately be the larger of the two. Every surface
+  used to claim a saving regardless — a wrong-signed statement that had been
+  hiding in the hover since the feature shipped, and that this release would
+  have put in plain sight. It now reads *“~2× less, so far”* while that is
+  true, *“about the same so far”* when the two round to the same number, and it
+  drops the multiplier entirely when one side is zero and no ratio exists. The
+  ⓘ follows the exact numbers rather than the rounded wording, and names the
+  cause the arithmetic actually supports — whichever of cache reads or cache
+  writes contributed more to the difference, or none at all when the cache is
+  not moving the figure. Codex can only ever be the read weight: it reports no
+  cache writes. The hover names no cause at all; it has no room for the full
+  explanation, and naming the wrong one is worse than naming none.
+- **The page no longer hides its own footer behind a long list.** Order is now:
+  model → quota + context → what the session cost → the raw figures behind it →
+  cache → delegated work. The agent list is the one block that grows with the
+  session (up to its cap of 12 rows, with the remainder stated), so it closes
+  the page: with a dozen agents open, `Details` used to sit below the fold and
+  was never seen.
+- **The agent list folds away.** It opens and closes from a link at the foot of
+  the section (`Show each agent ▾` / RU «Показать по агентам ▾»), and the choice
+  is remembered. What stays visible either way: how much went to agents, to
+  which models, and — when it clears the threshold that line has always had —
+  what waiting cost them. There is also a command for it —
+  *“Claude/Codex Statusbar: Show/hide the agent list in the panel”*. The panel
+  still runs **no scripts**: the link runs that one command, and the state lives
+  in the extension, because the page itself is re-rendered every few seconds and
+  cannot remember anything.
 - Marketplace keywords now include `subagents`, `cursor`, `windsurf` and
   `vscodium` — the extension already works in those editors and in any VS Code
   fork with Claude Code or Codex installed.

@@ -14,6 +14,7 @@ import {
   lastCacheTier,
   idleRebuildOf,
   rebuildCost,
+  costDirection,
   addRebuild,
   cacheWriteSplit,
   cacheWriteTokens,
@@ -22,7 +23,7 @@ import {
   knownModelWindow,
   WINDOW_5H_SECONDS,
 } from "../metrics";
-import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown, rebuildDisplay, ISSUES_URL } from "../render";
+import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown, rebuildDisplay, agentIdle, DELEGATED_TOGGLE_COMMAND, ISSUES_URL } from "../render";
 import { parseLocalQuota, windowFromBridge } from "../localQuota";
 import {
   parseCachedUsage,
@@ -1392,7 +1393,7 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   const en = buildPanelHtml(totals, W, q, now, "en");
   assert.match(en, /^<!DOCTYPE html>/);
   assert.match(en, /Token-equivalent with cache/);
-  assert.match(en, /Without cache/);
+  assert.match(en, /without cache ≈ 11\.2M tok/);
   assert.match(en, /Cache saved/);
   assert.match(en, /~4\.6× lower/);
   assert.match(en, /2\.5M/);
@@ -1401,7 +1402,7 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   assert.match(en, /Details/);
   const ru = buildPanelHtml(totals, W, q, now, "ru");
   assert.match(ru, /Токен-эквивалент с кэшем/);
-  assert.match(ru, /Без кэша было бы/);
+  assert.match(ru, /без кэша было бы ≈ 11\.2M ток/);
   assert.match(ru, /Сэкономлено кэшем/);
   assert.match(ru, /в ~4\.6× меньше/);
   assert.match(ru, /Тариф/);
@@ -1989,7 +1990,9 @@ test("buildPanelHtml: subagent section names models, effort, spend and share", (
     undefined,
     undefined,
     subs,
-    500_000
+    500_000,
+    undefined,
+    true // list open: the per-agent rows are what this test is about
   );
   assert.match(html, /Делегировано саб-агентам/);
   assert.match(html, /2 саб-агента · ≈ 2M ток — 80% расхода этой сессии/);
@@ -2059,7 +2062,7 @@ test("buildPanelHtml: nested agents are labelled by depth, not attributed to the
   ];
   const html = buildPanelHtml(
     totals, W, { state: "disabled", fiveH: null, sevenD: null }, 1000, "ru",
-    undefined, undefined, undefined, subs, 500_000
+    undefined, undefined, undefined, subs, 500_000, undefined, true
   );
   assert.match(html, /Explore · Sonnet 5 · high · уровень 3 — Grep/);
   // the note must not claim the Lead chose every model
@@ -2346,14 +2349,14 @@ test("lastCacheTier: an agent file reports its own tier only with sidechain incl
   assert.equal(lastCacheTier(raw, true), "5m");
 });
 
-test("agentDigest: carries the agent's own tier and reload tokens", () => {
+test("agentDigest: carries the agent's reload tokens (and no tier nobody reads)", () => {
   const raw = [
     turn({ id: "a", at: "2026-08-24T10:00:00Z", write: 2000, tier: "5m", sidechain: true }),
     turn({ id: "b", at: "2026-08-24T10:30:00Z", write: 120_000, tier: "5m", sidechain: true }),
   ].join("\n");
   const d = agentDigest(raw);
-  assert.equal(d.tier, "5m");
   assert.equal(d.rebuild.tokens, 120_000);
+  assert.equal(d.rebuild.unjudged, 0, "both gaps were judgeable");
   assert.equal(rebuildCost(d.rebuild, W), 150_000);
   assert.equal(d.totals.cacheWrite5m, 122_000);
 });
@@ -2404,8 +2407,8 @@ test("effectiveTokens: a 1-hour write costs x2.0, a 5-minute one x1.25, unknown 
   assert.equal(effectiveTokens(t(0, 0, 1000), { cacheRead: 0.1, cacheWrite: 1 }), 1000);
 });
 
-const REB = (o: Partial<{ tokens: number; tokens1h: number; tokens5m: number; tokensUnknown: number; cacheWrite: number; streams: number }>) => ({
-  tokens: 0, tokens1h: 0, tokens5m: 0, tokensUnknown: 0, cacheWrite: 0, streams: 0, ...o,
+const REB = (o: Partial<{ tokens: number; tokens1h: number; tokens5m: number; tokensUnknown: number; cacheWrite: number; streams: number; unjudged: number }>) => ({
+  tokens: 0, tokens1h: 0, tokens5m: 0, tokensUnknown: 0, cacheWrite: 0, streams: 0, unjudged: 0, ...o,
 });
 
 test("rebuildDisplay: 2.9% of the session stays silent, 3.1% speaks", () => {
@@ -2471,10 +2474,14 @@ test("buildPanelHtml (en): the reload line sits under the delegated-work summary
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
     undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
   );
-  assert.match(html, /of that, ≈ 3\.8M went on reloading context after pauses/);
-  assert.match(html, /cache stays warm for 5 minutes/);
+  assert.match(
+    html,
+    /of that, ≈ 3\.8M \(19% of what the agents spent\) went on reloading context after pauses/,
+    "the share is the yardstick a per-agent % is read against"
+  );
+  assert.match(html, /cache usually stays warm for 5 minutes/, "true of every agent measured here, not guaranteed of all");
   assert.match(html, /While an agent waits, its cache goes cold/, "the footnote is attached");
-  assert.match(html, /Past five minutes of waiting/, "the guidance sentence leads the closing note");
+  assert.match(html, /five minutes for most agents/, "the guidance sentence stays with the number, list open or not");
 });
 
 test("buildPanelHtml (ru): the same line and note, in Russian", () => {
@@ -2482,9 +2489,9 @@ test("buildPanelHtml (ru): the same line and note, in Russian", () => {
     REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
     undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
   );
-  assert.match(html, /из них ≈ 3\.8M ушло на повторную загрузку контекста после пауз/);
+  assert.match(html, /из них ≈ 3\.8M \(19% расхода агентов\) ушло на повторную загрузку контекста после пауз/);
   assert.match(html, /Пока агент ждёт, его кэш остывает/);
-  assert.match(html, /После пяти минут ожидания/);
+  assert.match(html, /у большинства агентов это пять минут/);
 });
 
 test("buildPanelHtml: below the threshold the section is exactly as before", () => {
@@ -2735,12 +2742,12 @@ function withoutFootnotes(html: string): string {
 }
 
 const CLAUDE_ORDER = [
-  { lang: "en" as const, quota: "Subscription quota", context: "context: 47%", delegated: "Delegated work", cache: "<h3>Cache</h3>", cost: "Token-equivalent with cache", details: "<h3>Details</h3>", moved: ["Without cache", "Cache saved"], note: "not a money price", mult: "~4.6× lower" },
-  { lang: "ru" as const, quota: "Тариф", context: "контекст: 47%", delegated: "Делегировано саб-агентам", cache: "<h3>Кэш</h3>", cost: "Токен-эквивалент с кэшем", details: "<h3>Детали</h3>", moved: ["Без кэша было бы", "Сэкономлено кэшем"], note: "не денежная цена", mult: "в ~4.6× меньше" },
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 47%", delegated: "Delegated work", cache: "<h3>Cache</h3>", cost: "Token-equivalent with cache", details: "<h3>Details</h3>", compare: "without cache ≈ 11.2M tok — ~4.6× more", hidden: "Cache saved", note: "not a money price" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 47%", delegated: "Делегировано саб-агентам", cache: "<h3>Кэш</h3>", cost: "Токен-эквивалент с кэшем", details: "<h3>Детали</h3>", compare: "без кэша было бы ≈ 11.2M ток — в ~4.6× больше", hidden: "Сэкономлено кэшем", note: "не денежная цена" },
 ];
 
 for (const c of CLAUDE_ORDER) {
-  test(`buildPanelHtml (${c.lang}): the page reads left → where → how well → raw number`, () => {
+  test(`buildPanelHtml (${c.lang}): left → what it cost → the raw figures → cache → the long list`, () => {
     const now = 1000;
     const q = {
       state: "ok" as const,
@@ -2753,36 +2760,35 @@ for (const c of CLAUDE_ORDER) {
     );
     const at = (n: string): number => posIn(html, n, c.lang);
     assert.ok(at(c.quota) < at(c.context), "the context line travels with the quota");
-    assert.ok(at(c.context) < at(c.delegated), "quota + context open the page");
-    assert.ok(at(c.delegated) < at(c.cache), "where it went, then how well it is spent");
-    assert.ok(at(c.cache) < at(c.cost), "the raw number comes last");
-    assert.ok(at(c.cost) < at(c.details), "…just above Details");
+    assert.ok(at(c.context) < at(c.cost), "quota + context still open the page");
+    assert.ok(at(c.cost) < at(c.details), "the number, then the raw figures behind it");
+    assert.ok(at(c.details) < at(c.cache), "…then how the cache is doing");
+    // The agent list is the only block whose length is unbounded, so it closes
+    // the page: nothing a reader needs can be pushed below the fold by it.
+    assert.ok(at(c.cache) < at(c.delegated), "the variable-length block comes last");
   });
 
-  test(`buildPanelHtml (${c.lang}): the cost block is one line, its extras inside the ⓘ`, () => {
+  test(`buildPanelHtml (${c.lang}): the comparison is visible, only the derived total hides in the ⓘ`, () => {
     const now = 1000;
     const q = { state: "ok" as const, fiveH: { pct: 24, resetAt: now + 100 }, sevenD: { pct: 41, resetAt: now + 100 } };
     const html = buildPanelHtml(ORDER_TOTALS, W, q, now, c.lang);
     const visible = withoutFootnotes(html);
     assert.ok(visible.includes(c.cost), "the headline label stays visible");
-    for (const moved of c.moved) {
-      assert.ok(!visible.includes(moved), `moved into the footnote: ${moved}`);
-    }
-    assert.ok(!visible.includes(c.note), "the disclaimer moved too");
-    // nothing was deleted: one footnote carries all three, numbers intact
-    const tip = new RegExp(`${c.moved[0]}[^<]*`).exec(html)?.[0] ?? "";
-    assert.ok(tip.includes("11.2M"), "without-cache figure");
-    assert.ok(tip.includes(c.mult), "savings multiplier");
-    assert.ok(tip.includes(c.note), "disclaimer");
-    assert.ok(tip.includes(c.moved[1]), "both extras sit in the SAME footnote");
+    // This is the figure the extension exists to show: a hover is the wrong
+    // place for it, and anyone who never hovers used to miss it entirely.
+    assert.ok(visible.includes(c.compare), `read without hovering: ${c.compare}`);
+    assert.ok(!visible.includes(c.hidden), "the derived total (= the difference) stays in the footnote");
+    assert.ok(!visible.includes(c.note), "so does the disclaimer");
+    const tip = new RegExp(`${c.hidden}[^<]*`).exec(html)?.[0] ?? "";
+    assert.ok(tip.includes(c.note), "one footnote carries both");
     // and the visible line still carries the headline number
     assert.match(visible, /2\.5M/);
   });
 }
 
 const CODEX_ORDER = [
-  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", moved: ["Without cache", "Cache saved"], value: "≈ 33k tok" },
-  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", moved: ["Без кэша было бы", "Сэкономлено кэшем"], value: "≈ 33k ток" },
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", compare: "without cache ≈ 105k tok — ~3.2× more", hidden: "Cache saved", value: "≈ 33k tok" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", compare: "без кэша было бы ≈ 105k ток — в ~3.2× больше", hidden: "Сэкономлено кэшем", value: "≈ 33k ток" },
 ];
 
 for (const c of CODEX_ORDER) {
@@ -2796,15 +2802,13 @@ for (const c of CODEX_ORDER) {
     );
     const at = (n: string): number => posIn(html, n, c.lang);
     assert.ok(at(c.quota) < at(c.context), "quota, then context");
-    assert.ok(at(c.context) < at(c.cache), "context above the cache section");
-    assert.ok(at(c.cache) < at(c.cost), "the raw number comes last");
-    assert.ok(at(c.cost) < at(c.details), "…just above Details");
-    // the extras live in the ⓘ, exactly as in the Claude panel
+    assert.ok(at(c.context) < at(c.cost), "context above what it cost");
+    assert.ok(at(c.cost) < at(c.details), "the number, then the raw figures behind it");
+    assert.ok(at(c.details) < at(c.cache), "…then how the cache is doing");
+    // the same split as the Claude panel: comparison visible, the rest in the ⓘ
     const visible = withoutFootnotes(html);
-    for (const moved of c.moved) {
-      assert.ok(!visible.includes(moved), `moved into the footnote: ${moved}`);
-    }
-    assert.match(html, new RegExp(`${c.moved[0]}[^<]*${c.moved[1]}`), "both extras sit in one footnote");
+    assert.ok(visible.includes(c.compare), `read without hovering: ${c.compare}`);
+    assert.ok(!visible.includes(c.hidden), "the derived total stays in the footnote");
     // real arithmetic, not a placeholder: 20k fresh + 5k out + 80k×0.1 = 33k
     assert.ok(visible.includes(c.value), `headline value: ${c.value}`);
     assert.doesNotMatch(html, /NaN/);
@@ -2867,4 +2871,643 @@ test("the issue link cannot drift from package.json's bugs.url", () => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const pkg = require("../../package.json") as { bugs?: { url?: string } };
   assert.equal(ISSUES_URL, pkg.bugs?.url);
+});
+
+// ---------------------------------------------------------------------------
+// What waiting cost EACH agent, and the list that folds away.
+//
+// A single total for all agents cannot say which one to stop leaving open, and
+// a bare percentage cannot say whether it is worth acting on — so the row
+// carries both, and the share is of that agent's OWN spend: a one-turn agent
+// then reads 0% (it really did waste nothing) instead of being scored low for
+// having had nothing to reuse yet.
+// ---------------------------------------------------------------------------
+
+const IDLE_BASE = { agentType: "implementer", description: "Fix round R3", modelId: "claude-opus-5", modelLabel: "Opus 5", effort: "xhigh" };
+/** 400k reload tokens on the 5-minute tier = 500k token-equivalent = 25% of a
+ *  2M agent — the same weights the headline uses, so the two are comparable. */
+const IDLE_AGENT = { ...IDLE_BASE, effective: 2_000_000, rebuild: REB({ tokens: 400_000, tokens5m: 400_000, cacheWrite: 900_000, streams: 1 }) };
+const PATIENT_AGENT = { agentType: "reviewer", description: "Review cache formula", modelId: "claude-opus-5", modelLabel: "Opus 5", effort: "xhigh", effective: 1_000_000, rebuild: REB({ cacheWrite: 800_000 }) };
+const IDLE_TOTALS = { input: 0, output: 0, work: 4_000_000, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0 };
+
+test("agentIdle: the share is of the agent's own spend, priced with the session's weights", () => {
+  const idle = agentIdle(IDLE_AGENT, W);
+  assert.equal(idle.known, true);
+  assert.equal(idle.cost, 500_000, "400k on the 5-minute tier = 500k token-equivalent");
+  assert.equal(idle.pctText, "25");
+});
+
+test("agentIdle: an agent that never waited reads 0 — that is an answer, not a gap", () => {
+  const idle = agentIdle(PATIENT_AGENT, W);
+  assert.equal(idle.known, true);
+  assert.equal(idle.cost, 0);
+  assert.equal(idle.pctText, "0");
+});
+
+test("agentIdle: an unjudged gap claims nothing, not even a zero", () => {
+  // A cache lifetime is what decides whether a pause was long enough to kill the
+  // cache. Where the log never stated one, the gap is unjudgeable and lands in
+  // `unjudged` — and "0%" there would be an invention.
+  const blind = agentIdle({ ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 900_000, unjudged: 1 }) }, W);
+  assert.equal(blind.known, false);
+});
+
+test("agentIdle: a one-turn agent has no gap to judge, so 0% is the truth", () => {
+  // Regression: keying on "was a tier read" instead of "was a gap unjudged" made
+  // this agent unknown, although a stream with no gaps has nothing to judge.
+  const single = agentIdle({ ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 120_000 }) }, W);
+  assert.deepEqual(single, { known: true, cost: 0, pctText: "0", atLeast: false });
+});
+
+test("agentIdle: a real loss never prints as 0% — it prints as <1", () => {
+  const tiny = agentIdle({ ...IDLE_AGENT, rebuild: REB({ tokens: 3_000, tokens5m: 3_000, cacheWrite: 900_000, streams: 1 }) }, W);
+  assert.equal(tiny.pctText, "<1", "in a cell about what waiting cost, 0% reads as 'it cost nothing'");
+});
+
+test("buildPanelHtml: the agent list folds away; the summary and the link never do", () => {
+  const subs = [IDLE_AGENT, PATIENT_AGENT];
+  const collapsed = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, subs, 1_000_000, undefined, false
+  );
+  assert.match(collapsed, /Делегировано саб-агентам/, "the heading stays");
+  assert.match(collapsed, /2 саб-агента · ≈ 3M ток/, "so does how much was delegated");
+  assert.match(collapsed, /Opus 5 · xhigh/, "and to which models");
+  assert.ok(!/Fix round R3/.test(collapsed), "the per-agent rows are what folds");
+  assert.match(collapsed, /Показать по агентам/);
+  // The page runs no scripts and is replaced on every tick, so the only way to
+  // open the list is a command the extension itself handles.
+  assert.match(collapsed, new RegExp(`href="command:${DELEGATED_TOGGLE_COMMAND}"`));
+
+  const open = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, subs, 1_000_000, undefined, true
+  );
+  assert.match(open, /implementer · Opus 5 · xhigh — Fix round R3/);
+  assert.match(open, /простой 25% \(≈ 500k\)/, "the percentage AND the tokens: 25% of a small agent is not worth acting on");
+  assert.match(open, /простой 0%/, "an agent that never waited says so");
+  assert.match(open, /простой — доля расхода самого агента/, "the cell explains itself once, under the list");
+  assert.match(open, /Свернуть список агентов/);
+});
+
+test("buildPanelHtml (en): the same list, the same two figures, in English", () => {
+  const open = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [IDLE_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(open, /idle 25% \(≈ 500k\)/);
+  assert.match(open, /Hide the agent list/);
+  assert.match(open, /idle — the share of that agent's own spend/);
+});
+
+test("buildPanelHtml: with no readable cache lifetime the idle column is not drawn at all", () => {
+  // A column of "—" teaches nothing and costs every row its width.
+  const blind = [
+    { ...IDLE_AGENT, rebuild: REB({ cacheWrite: 900_000, unjudged: 2 }) },
+    { ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 800_000, unjudged: 1 }) },
+  ];
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, blind, 1_000_000, undefined, true
+  );
+  assert.match(html, /Fix round R3/, "the rows are still there");
+  assert.ok(!/простой/.test(html), "but nothing pretends to know what waiting cost them");
+});
+
+test("buildPanelHtml: one unreadable agent among readable ones gets a dash, never a zero", () => {
+  const mixed = [IDLE_AGENT, { ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 800_000, unjudged: 1 }) }];
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, mixed, 1_000_000, undefined, true
+  );
+  assert.match(html, /простой 25% \(≈ 500k\)/);
+  assert.match(html, /простой —/);
+});
+
+test("the panel's only command link cannot drift from package.json", () => {
+  // Same failure mode as the issue URL: the link stays in the page, the command
+  // it names quietly stops existing, and the list can never be opened again.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const pkg = require("../../package.json") as { contributes?: { commands?: Array<{ command: string }> } };
+  const declared = (pkg.contributes?.commands ?? []).map((c) => c.command);
+  assert.ok(declared.includes(DELEGATED_TOGGLE_COMMAND), `not contributed: ${DELEGATED_TOGGLE_COMMAND}`);
+});
+
+// ---------------------------------------------------------------------------
+// Round 2 — two defects the external review found in the work above.
+//
+// 1. The comparison stated its direction unconditionally ("N× more"), which is
+//    false on a turn that has WRITTEN a cache and read nothing back: a 1-hour
+//    write is priced at 2× a fresh token, so with-cache is then the LARGER
+//    number. It used to be wrong only inside a hover; this round put it on the
+//    page, where wrong is much more expensive.
+// 2. `idle 0%` was rendered whenever the agent's tier was known, but a tier
+//    stated at the END of a log says nothing about earlier gaps. A zero there
+//    is an invented fact.
+// ---------------------------------------------------------------------------
+
+test("costDirection: the cache has not always saved you something", () => {
+  // work 1k + a 1-hour write of 100k: with cache 201k, without cache 101k.
+  assert.deepEqual(costDirection(201_000, 101_000), { dir: "less", mult: "2" });
+  assert.deepEqual(costDirection(2_450_000, 11_200_000), { dir: "more", mult: "4.6" });
+  assert.equal(costDirection(1000, 1000).dir, "same");
+  // anything that ROUNDS to 1× is "same" too — "~1× more" is not a statement
+  assert.equal(costDirection(1000, 1020).dir, "same");
+  assert.equal(costDirection(0, 0).dir, "same", "an empty session claims nothing");
+});
+
+const WARMUP_TOTALS = {
+  input: 500, output: 500, work: 1000,
+  cacheRead: 0, cacheWrite: 100_000,
+  cacheWrite1h: 100_000, cacheWrite5m: 0, cacheWriteUnknown: 0,
+};
+
+test("buildPanelHtml: a first turn that only writes a cache does not claim a saving", () => {
+  // 1k + 2.0×100k = 201k with cache; 1k + 100k = 101k without. Saying
+  // "without cache would be 2× more" here is the opposite of the arithmetic.
+  const en = buildPanelHtml(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /without cache ≈ 101k tok — ~2× less, so far/);
+  assert.ok(!/101k tok — ~2× more/.test(en));
+  assert.match(en, /The cache has not earned back what it cost yet/, "the ⓘ explains it instead of claiming a saving");
+  assert.match(en, /A cache write is charged at more than a fresh input token/, "and names the cause that applies: this session HAS written to cache");
+  assert.ok(!/Cache saved/.test(en), "a saving of zero is not a saving");
+
+  const ru = buildPanelHtml(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /без кэша было бы ≈ 101k ток — пока в ~2× меньше/);
+  assert.match(ru, /Кэш пока не вернул того, что стоил/);
+  assert.ok(!/Сэкономлено кэшем/.test(ru));
+});
+
+test("buildView: the hover says the same thing, and never the reverse", () => {
+  const en = buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en").tooltip;
+  // The hover names no cause at all: it has no room for the three-way
+  // explanation the panel's ⓘ carries, and naming the wrong one is worse.
+  assert.match(en, /without cache ≈ \*\*101k\*\* \(~2× higher so far\)/);
+  assert.ok(!/has not earned back/.test(en));
+  const ru = buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "ru").tooltip;
+  assert.match(ru, /без кэша ≈ \*\*101k\*\* \(пока в ~2× больше\)/);
+});
+
+test("buildCodexPanelHtml: a cacheReadWeight above 1 inverts Codex too — and is stated honestly", () => {
+  // The setting allows up to 100. At 2.0 a cached token is priced above a fresh
+  // one, so the with-cache figure overtakes the without-cache one.
+  const html = buildCodexPanelHtml(
+    { state: "ok", fiveH: null, sevenD: null }, 1000, "en",
+    { source: "stdio", usage: ORDER_CODEX_USAGE, weights: { cacheRead: 2, cacheWrite: 1.25 } }
+  );
+  // fresh 20k + out 5k + 80k×2 = 185k with cache; 100k + 5k = 105k without.
+  assert.match(html, /≈ 185k tok/);
+  assert.match(html, /without cache ≈ 105k tok — ~1\.8× less/);
+  assert.ok(!/Cache saved/.test(html));
+  // Codex reports no cache WRITES at all, so blaming a warm-up write here would
+  // be an invented cause: the read weight is the only thing that can invert it.
+  assert.match(html, /Cached input is priced above fresh input here/);
+  assert.ok(!/A cache write is charged at more than a fresh input token/.test(html));
+});
+
+test("idleRebuildOf: a gap before any tier is stated is recorded as unjudged, not as zero", () => {
+  const raw = [
+    turn({ id: "a", at: "2026-08-25T10:00:00Z", write: 1000 }), // no tier stated
+    turn({ id: "b", at: "2026-08-25T10:30:00Z", write: 50_000 }), // 30 min later
+    turn({ id: "c", at: "2026-08-25T10:31:00Z", write: 2000, tier: "5m" }),
+  ].join("\n");
+  const r = idleRebuildOf(raw);
+  assert.equal(r.tokens, 0, "with no stated TTL nothing can be counted — unchanged");
+  assert.ok(r.unjudged >= 1, "but the 30-minute gap is remembered as unmeasured");
+});
+
+test("idleRebuildOf: a broken clock is unjudged too, and a clean log has none", () => {
+  const skewed = [
+    turn({ id: "a", at: "2026-08-25T10:00:00Z", write: 1000, tier: "5m" }),
+    turn({ id: "b", at: "2026-08-25T09:50:00Z", write: 2000, tier: "5m" }),
+  ].join("\n");
+  assert.ok(idleRebuildOf(skewed).unjudged >= 1);
+  const clean = [
+    turn({ id: "a", at: "2026-08-25T10:00:00Z", write: 1000, tier: "5m" }),
+    turn({ id: "b", at: "2026-08-25T10:01:00Z", write: 2000, tier: "5m" }),
+  ].join("\n");
+  assert.equal(idleRebuildOf(clean).unjudged, 0, "a log with nothing to hide reports nothing");
+});
+
+test("buildPanelHtml: a zero built on an unjudged gap is a dash, not a 0%", () => {
+  // absence of evidence is not evidence of absence — and the row says so, in
+  // both directions of the same session
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined,
+    [IDLE_AGENT, { ...PATIENT_AGENT, rebuild: REB({ cacheWrite: 800_000, unjudged: 1 }) }],
+    1_000_000, undefined, true
+  );
+  assert.match(html, /простой 25% \(≈ 500k\)/);
+  assert.match(html, /простой —/);
+  assert.ok(!/простой 0%/.test(html));
+});
+
+test("addRebuild: the unjudged count survives being summed across agents", () => {
+  const a = REB({ tokens: 100, tokens5m: 100, cacheWrite: 500, streams: 1, unjudged: 2 });
+  const b = REB({ cacheWrite: 700, unjudged: 3 });
+  assert.equal(addRebuild(a, b).unjudged, 5);
+});
+
+// ---------------------------------------------------------------------------
+// Round 3 — five edge cases the second review found in the round-2 fixes.
+// Every one of them is a statement the UI could make that the numbers do not
+// support, which is the only kind of defect that matters in a tool whose whole
+// claim is that its numbers can be trusted.
+// ---------------------------------------------------------------------------
+
+test("the ⓘ follows the exact numbers, not the rounded direction", () => {
+  // 100k work + 5k cache read: with cache 100.5k, without 105k. That rounds to
+  // "1×", so the visible line says "about the same" — but the cache HAS saved
+  // 4.5k, and the footnote must not tell the reader it has not paid off yet.
+  const totals = {
+    input: 50_000, output: 50_000, work: 100_000,
+    cacheRead: 5_000, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /without cache ≈ 105k tok — about the same so far/, "presentation rounds");
+  assert.match(en, /Cache saved: ≈ 4\.5k tok/, "the footnote does not round the sign away");
+  assert.ok(!/has not earned back what it cost/.test(en));
+});
+
+test("with nothing written to cache, the inversion is blamed on the weight, not on a write", () => {
+  // cacheReadWeight 2.0 (the setting allows up to 100) and no writes at all:
+  // the with-cache figure is larger, but no cache write caused that.
+  const heavy = { cacheRead: 2, cacheWrite: 1.25 };
+  const totals = {
+    input: 500, output: 500, work: 1000,
+    cacheRead: 100_000, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const en = buildPanelHtml(totals, heavy, QUOTA_OFF, 1000, "en");
+  assert.match(en, /≈ 201k tok/);
+  assert.match(en, /Cached input is priced above fresh input here/);
+  assert.ok(!/A cache write is charged at more/.test(en), "no write happened — naming one invents a cause");
+});
+
+test("a comparison against zero states the direction and skips the ratio", () => {
+  // cacheReadWeight 0 is explicitly allowed: with only cached input, the
+  // with-cache figure is 0. "About the same as 100k" would be nonsense, and so
+  // would a multiplier — there is nothing to divide by.
+  const free = { cacheRead: 0, cacheWrite: 1.25 };
+  const totals = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 100_000, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  assert.deepEqual(costDirection(0, 100_000), { dir: "more", mult: null });
+  const en = buildPanelHtml(totals, free, QUOTA_OFF, 1000, "en");
+  assert.match(en, /without cache ≈ 100k tok(?!.*×)/, "the figure, no invented ratio");
+  assert.ok(!/about the same/.test(en));
+  assert.match(en, /Cache saved: ≈ 100k tok\./, "and the saving is still stated, without a multiplier");
+});
+
+test("a measured-in-part idle figure is marked as a floor, never as the number", () => {
+  const partial = {
+    ...IDLE_AGENT,
+    rebuild: REB({ tokens: 400_000, tokens5m: 400_000, cacheWrite: 900_000, streams: 1, unjudged: 1 }),
+  };
+  const idle = agentIdle(partial, W);
+  assert.equal(idle.atLeast, true);
+  const ru = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, [partial], 1_000_000, undefined, true
+  );
+  assert.match(ru, /простой ≥ 25% \(≥ 500k\)/, "the real figure can only be higher, so the row says so");
+  const en = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [partial], 1_000_000, undefined, true
+  );
+  assert.match(en, /idle ≥ 25% \(≥ 500k\)/);
+  assert.match(en, /≥ marks a figure measured from part of the log only/, "the marker is explained where it appears");
+  // …and the explanation is not shown when nothing carries the marker
+  const exact = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [IDLE_AGENT], 1_000_000, undefined, true
+  );
+  assert.ok(!/≥ marks a figure/.test(exact));
+});
+
+test("the section total is marked as a floor on the same rule", () => {
+  const partial = REB({ tokens: 3_000_000, tokens5m: 3_000_000, cacheWrite: 6_000_000, streams: 2, unjudged: 4 });
+  const html = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: partial }
+  );
+  // 3M five-minute tokens cost 3.75M: a FLOOR must show 3.7M, never 3.8M —
+  // rounding a lower bound upward claims more than was measured.
+  assert.match(html, /of that, ≥ 3\.7M \(≥18% of what the agents spent\)/);
+  // and stays an "≈" when everything was measured
+  const full = REB({ tokens: 3_000_000, tokens5m: 3_000_000, cacheWrite: 6_000_000, streams: 2 });
+  const clean = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: full }
+  );
+  assert.match(clean, /of that, ≈ 3\.8M \(19% of what the agents spent\)/);
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 — the third review's findings. Same theme throughout: a statement the
+// numbers do not support, in a tool whose entire claim is that its numbers can
+// be trusted.
+// ---------------------------------------------------------------------------
+
+test("agentIdle: an agent that spent nothing has no share to state", () => {
+  // 0/0 is not a zero. An empty log, a log of placeholders, or a read that
+  // failed all arrive here as effective 0 — none of them is "it never waited".
+  const empty = agentIdle({ ...PATIENT_AGENT, effective: 0, rebuild: REB({}) }, W);
+  assert.equal(empty.known, false);
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined,
+    [IDLE_AGENT, { ...PATIENT_AGENT, effective: 0, rebuild: REB({}) }],
+    1_000_000, undefined, true
+  );
+  assert.match(html, /простой —/);
+  assert.ok(!/простой 0%/.test(html));
+});
+
+test("agentIdle: a sub-1% share with unjudged gaps states the tokens, not a bound both ways", () => {
+  // "<1%" is an upper bound on what WAS measured; the unjudged part makes the
+  // real figure a floor. Saying both at once ("≥ <1%") is not a statement, so
+  // the share is left out and the tokens carry the ≥.
+  const partial = {
+    ...IDLE_AGENT,
+    rebuild: REB({ tokens: 3_000, tokens5m: 3_000, cacheWrite: 900_000, streams: 1, unjudged: 1 }),
+  };
+  const idle = agentIdle(partial, W);
+  assert.equal(idle.pctText, null);
+  assert.equal(idle.atLeast, true);
+  const ru = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, [partial], 1_000_000, undefined, true
+  );
+  assert.match(ru, /простой ≥ 3\.7k/, "3.75k floored, not rounded up");
+  assert.ok(!/<1%/.test(ru));
+});
+
+test("the lead's own reloads carry the same floor marker as the panel rows", () => {
+  const partial = REB({ tokens: 900_000, tokens1h: 900_000, cacheWrite: 5_000_000, streams: 1, unjudged: 2 });
+  const marked = buildView(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, undefined, { lead: partial }
+  );
+  assert.match(marked.tooltip, /after-idle reloads ≥ 900k/, "a quieter line is still a claim");
+  const full = REB({ tokens: 900_000, tokens1h: 900_000, cacheWrite: 5_000_000, streams: 1 });
+  const exact = buildView(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, undefined, { lead: full }
+  );
+  assert.match(exact.tooltip, /after-idle reloads 900k/);
+  assert.ok(!/≥/.test(exact.tooltip));
+});
+
+test("the hover's subagent fragment is marked too, on the same rule", () => {
+  const partial = REB({ tokens: 3_000_000, tokens5m: 3_000_000, cacheWrite: 6_000_000, streams: 2, unjudged: 3 });
+  const v = buildView(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, { subagents: partial }
+  );
+  assert.match(v.tooltip, /≥ 3\.7M reloaded after pauses/);
+});
+
+test("with no cache activity at all, the ⓘ says exactly that", () => {
+  // work only: the two figures are the same number, and neither a warm-up write
+  // nor a read weight has anything to do with it.
+  const bare = {
+    input: 60_000, output: 40_000, work: 100_000,
+    cacheRead: 0, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const en = buildPanelHtml(bare, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /Nothing has been read from or written to cache in this session yet/);
+  assert.ok(!/Cached input is priced above fresh input/.test(en));
+  assert.ok(!/A cache write is charged at more/.test(en));
+  const ru = buildPanelHtml(bare, W, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /кэш ещё не читался и не записывался/);
+
+  // Codex, same case: no cached input yet.
+  const codex = buildCodexPanelHtml(
+    { state: "ok", fiveH: null, sevenD: null }, 1000, "en",
+    { source: "stdio", usage: { totalTokens: 105_000, lastTokens: 0, inputTokens: 100_000, cachedInputTokens: 0, outputTokens: 5_000, reasoningOutputTokens: 0 } }
+  );
+  assert.match(codex, /Nothing has been read from or written to cache/);
+});
+
+test("a saving the display rounds to 1× is stated without a contradictory multiplier", () => {
+  const totals = {
+    input: 50_000, output: 50_000, work: 100_000,
+    cacheRead: 5_000, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /Cache saved: ≈ 4\.5k tok\./);
+  assert.ok(!/~1× lower/.test(en), "the line above already called the two the same");
+});
+
+test("agent-written text is escaped, tags and all", () => {
+  // A task description is written by a model, not by us. The panel renders it
+  // inside a webview: an unescaped one is a script-injection hole, and the
+  // previous "escapes nothing dangerous" test never passed a hostile string.
+  const hostile = {
+    ...IDLE_BASE,
+    agentType: '<img src=x onerror="alert(1)">',
+    description: '</span><script>alert(2)</script>',
+    modelLabel: "Opus 5 <b>",
+    effective: 1_000_000,
+    rebuild: REB({ cacheWrite: 100_000 }),
+  };
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [hostile], 1_000_000, undefined, true
+  );
+  assert.ok(!/<script>/.test(html), "no raw script tag reaches the page");
+  assert.ok(!/<img src=x/.test(html), "nor a raw img tag");
+  assert.match(html, /&lt;img src=x/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test("the toggle stays wired: registered, allow-listed, and rendered from one constant", () => {
+  // The rendered href and the package contribution are already pinned. This
+  // closes the third hole: the command URI is inert unless the panel is created
+  // with the allow-list AND the command is registered.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("fs") as typeof import("fs");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("path") as typeof import("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "..", "src", "extension.ts"), "utf-8");
+  assert.match(src, /registerCommand\(DELEGATED_TOGGLE_COMMAND/, "the command must exist to be clickable");
+  assert.match(src, /enableCommandUris: \[DELEGATED_TOGGLE_COMMAND\]/, "and the webview must allow exactly it");
+  assert.match(src, /globalState\.update\(DELEGATED_STATE_KEY/, "and the choice must survive a reload");
+});
+
+// ---------------------------------------------------------------------------
+// Round 5 — the fourth review. A lower bound that rounds UP is not a lower
+// bound, and a cause is not established by the mere existence of the thing that
+// could have caused it.
+// ---------------------------------------------------------------------------
+
+test("fmtTokens: a floor truncates the decimal, an ordinary figure rounds it", () => {
+  assert.equal(fmtTokens(3_750_000), "3.8M");
+  assert.equal(fmtTokens(3_750_000, true), "3.7M", "≥ 3.8M would claim more than was measured");
+  assert.equal(fmtTokens(3_990), "4k");
+  assert.equal(fmtTokens(3_990, true), "3.9k");
+});
+
+test("agentIdle: a floored share never rounds up past what was measured", () => {
+  // 25.6k five-minute tokens = 32k token-equivalent = 1.6% of a 2M agent.
+  const partial = {
+    ...IDLE_AGENT,
+    rebuild: REB({ tokens: 25_600, tokens5m: 25_600, cacheWrite: 900_000, streams: 1, unjudged: 1 }),
+  };
+  assert.equal(agentIdle(partial, W).pctText, "1", "1.6% floored — ≥ 2% would be false");
+  // the same agent WITHOUT unjudged gaps is an exact figure, so it rounds
+  const exact = { ...IDLE_AGENT, rebuild: REB({ tokens: 25_600, tokens5m: 25_600, cacheWrite: 900_000, streams: 1 }) };
+  assert.equal(agentIdle(exact, W).pctText, "2");
+});
+
+test("the cause is the side that actually moved the number, not the side that exists", () => {
+  // Reads at weight 2 push the figure up by 100k; the one write, at weight 0.5,
+  // pulls it DOWN by 5k. A classifier keying on "is there a write" blames the
+  // write — the wrong half of the arithmetic.
+  const mixed = {
+    input: 500, output: 500, work: 1000,
+    cacheRead: 100_000, cacheWrite: 10_000,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 10_000,
+  };
+  const html = buildPanelHtml(mixed, { cacheRead: 2, cacheWrite: 0.5 }, QUOTA_OFF, 1000, "en");
+  assert.match(html, /Cached input is priced above fresh input here/);
+  assert.ok(!/A cache write is charged at more/.test(html));
+});
+
+test("a working cache that changes nothing is not called a saving, a warm-up, or a weight", () => {
+  // cacheReadWeight exactly 1: cached input is priced the SAME as fresh, so the
+  // two figures match. Saying it is priced "above" fresh input is simply false.
+  const totals = {
+    input: 100, output: 0, work: 100,
+    cacheRead: 100, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const en = buildPanelHtml(totals, { cacheRead: 1, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "en");
+  assert.match(en, /it is not moving this figure either way/);
+  assert.ok(!/priced above fresh input/.test(en));
+  // …and it claims no exact cancellation either: display rounding can hide a
+  // saving too small to change the figure, so "saves exactly what it costs"
+  // would be a claim about numbers nobody can see.
+  assert.ok(!/exactly what it costs/.test(en));
+  assert.ok(!/Nothing has been read from or written to cache/.test(en), "the cache IS being used");
+  const ru = buildPanelHtml(totals, { cacheRead: 1, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /не меняет ни в одну сторону/);
+
+  // Codex reaches the same state through its own weight setting.
+  const codex = buildCodexPanelHtml(
+    { state: "ok", fiveH: null, sevenD: null }, 1000, "en",
+    {
+      source: "stdio",
+      weights: { cacheRead: 1, cacheWrite: 1.25 },
+      usage: { totalTokens: 105_000, lastTokens: 0, inputTokens: 100_000, cachedInputTokens: 80_000, outputTokens: 5_000, reasoningOutputTokens: 0 },
+    }
+  );
+  assert.match(codex, /it is not moving this figure either way/);
+});
+
+test("the lead's floored reload figure reads the same in Russian", () => {
+  const partial = REB({ tokens: 3_750_000, tokens1h: 3_750_000, cacheWrite: 9_000_000, streams: 1, unjudged: 1 });
+  const ru = buildView(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, undefined, { lead: partial }
+  );
+  assert.match(ru.tooltip, /повторные загрузки после простоя ≥ 3\.7M/);
+});
+
+// ---------------------------------------------------------------------------
+// Round 6 — the fifth review. Two of these are the same lesson twice: a rule
+// applied to most of the places it belongs is not applied.
+// ---------------------------------------------------------------------------
+
+test("fmtTokens: floor mode floors below 1k too, not only in k and M", () => {
+  assert.equal(fmtTokens(999.5, true), "999", "≥ 1000 for a measured 999.5 is a false floor");
+  assert.equal(fmtTokens(999.5), "1000", "an ordinary figure still rounds");
+  assert.equal(fmtTokens(0.6, true), "0");
+});
+
+test("costCauseHint: components that cancel out are not a warm-up", () => {
+  // read 100 at weight .75 saves 25; one unknown-tier write of 100 at 1.25
+  // costs 25. Net zero: the cache has earned back exactly what it cost, and
+  // "has not earned back what it cost yet" would be false.
+  const totals = {
+    input: 100, output: 0, work: 100,
+    cacheRead: 100, cacheWrite: 100,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 100,
+  };
+  const weights = { cacheRead: 0.75, cacheWrite: 1.25 };
+  assert.equal(effectiveTokens(totals, weights), 300);
+  const en = buildPanelHtml(totals, weights, QUOTA_OFF, 1000, "en");
+  assert.match(en, /it is not moving this figure either way/);
+  assert.ok(!/has not earned back what it cost/.test(en));
+});
+
+test("no surface asserts a cache lifetime the transcript has not stated", () => {
+  // The detector reads each stream's own TTL. Any text that states one as a
+  // universal fact can contradict the very number printed beside it.
+  const html = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }, true
+  );
+  assert.ok(!/5 minutes for subagents/.test(html));
+  assert.ok(!/\(5 minutes for an agent\)/.test(html));
+  assert.ok(!/cache stays warm for 5 minutes/.test(html), "…the unqualified form of the summary line");
+  assert.match(html, /usually stays warm for 5 minutes/);
+  const ru = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }, true
+  );
+  assert.ok(!/5 минут у субагентов/.test(ru));
+  assert.match(ru, /обычно держится 5 минут/);
+});
+
+// ---------------------------------------------------------------------------
+// Round 7 — the sixth review. Every one of these is a sentence that promises
+// more than the numbers behind it can deliver.
+// ---------------------------------------------------------------------------
+
+test("the warm-up footnote does not promise a payback the settings can forbid", () => {
+  // With cacheReadWeight above 1, later reads make the figure LARGER. Saying a
+  // write "earns that back on the reads that follow" is then simply false, so
+  // the promise is scoped to the default weight instead of stated as a rule.
+  const en = buildPanelHtml(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /At the default read weight \(0\.1\) each later read on the same cache narrows that gap/);
+  assert.ok(!/and earns that back on the reads that follow/.test(en));
+  // …and the rule itself is about the PREMIUM, not about raw token counts: a
+  // session can write more than it reads and still show the smaller figure.
+  assert.match(en, /While the premium those writes pay is bigger than what the reads save/);
+  assert.ok(!/written more than it has read back/.test(en));
+});
+
+test("the cache footnote does not put every subagent in the 5-minute tier", () => {
+  const en = buildPanelHtml(REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en", undefined, { tier: "5m", hitRatePct: 82 });
+  assert.match(en, /\(usually\) a subagent/);
+  assert.ok(!/limit, or subagents —/.test(en));
+});
+
+test("a zero idle share claims a measured cost of nothing, not an absence of pauses", () => {
+  // A reload priced to zero (cacheWriteWeight 0 is a legal setting) is still a
+  // pause that outlived the cache: the legend must not deny that it happened.
+  const en = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(en, /0% means no waiting cost was measured for it/);
+  assert.ok(!/none outlived its cache/.test(en));
+});
+
+test("the reload advice describes what the waiting agent pays, not a fresh agent's bill", () => {
+  // The counterfactual is never computed, so it cannot be promised.
+  const en = buildPanelHtml(
+    REBUILD_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, REBUILD_SUBS, 30_000_000, { subagents: REBUILD_LOUD }
+  );
+  assert.match(en, /often more than starting a fresh agent with a smaller prompt/);
+  assert.ok(!/a fresh agent costs less than the one that waited/.test(en));
 });

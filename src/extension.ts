@@ -34,6 +34,7 @@ import {
   SubagentView,
   RebuildView,
   choicesMarkdown,
+  DELEGATED_TOGGLE_COMMAND,
 } from "./render";
 import { Weights, ContextInfo, QuotaWindow, ScopedQuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
 import { readLocalQuota } from "./localQuota";
@@ -71,6 +72,11 @@ let item: vscode.StatusBarItem;
 let timer: NodeJS.Timeout | undefined;
 let panel: vscode.WebviewPanel | undefined;
 let extCtx: vscode.ExtensionContext | undefined;
+/** Is the panel's per-agent list open? Kept HERE, not in the page: the webview
+ *  runs no scripts and its html is replaced on every tick, so a state that lived
+ *  in the document would reset every few seconds. Remembered across restarts. */
+let delegatedExpanded = false;
+const DELEGATED_STATE_KEY = "panel.delegatedExpanded";
 let diagnosticsChannel: vscode.OutputChannel | undefined;
 const loggedDiagnostics = new Set<string>();
 
@@ -430,6 +436,9 @@ function buildSubagentViews(subagents: SubagentInfo[], weights: Weights): Subage
       effort: a.effort,
       spawnDepth: a.spawnDepth,
       effective: effectiveTokens(a.totals, weights),
+      // What waiting cost THIS agent — already computed while its log was
+      // parsed, so the row costs nothing extra on the redraw tick.
+      rebuild: a.rebuild,
     }))
     // Most expensive first: this list answers "where did my tokens go", so the
     // biggest spender must never fall below the display cap.
@@ -1125,7 +1134,8 @@ async function tick() {
       modelView,
       subagentViews,
       effectiveTokens(leadTotals, conf.weights),
-      rebuildView
+      rebuildView,
+      delegatedExpanded
     );
   }
 }
@@ -1190,6 +1200,7 @@ async function selectProviderMode(): Promise<void> {
 
 export function activate(context: vscode.ExtensionContext) {
   extCtx = context;
+  delegatedExpanded = context.globalState.get<boolean>(DELEGATED_STATE_KEY, false);
   diagnosticsChannel = vscode.window.createOutputChannel("CC Statusbar");
   codexTokenWatcher = new CodexTokenUsageWatcher(() => void tick());
   // hydrate persisted model-window limits so a restart doesn't refetch.
@@ -1292,13 +1303,27 @@ export function activate(context: vscode.ExtensionContext) {
           "ccStatusbarUsage",
           messages(lang).panelTitle,
           { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-          { enableScripts: false, retainContextWhenHidden: true }
+          {
+            enableScripts: false,
+            retainContextWhenHidden: true,
+            // The page has exactly one interactive element — the link that opens
+            // and closes the agent list. Scripts stay off; the allow-list names
+            // the single command a link in this page may run.
+            enableCommandUris: [DELEGATED_TOGGLE_COMMAND],
+          }
         );
         panel.onDidDispose(() => {
           panel = undefined;
         });
       }
       void tick(); // fill/refresh immediately
+    }),
+    vscode.commands.registerCommand(DELEGATED_TOGGLE_COMMAND, () => {
+      delegatedExpanded = !delegatedExpanded;
+      // Remembered per user: a reader who opened the list once expects it open
+      // the next time, and the page itself cannot remember anything.
+      void extCtx?.globalState.update(DELEGATED_STATE_KEY, delegatedExpanded);
+      void tick();
     }),
     vscode.commands.registerCommand("ccStatusbar.selectProvider", () => {
       void selectProviderMode();

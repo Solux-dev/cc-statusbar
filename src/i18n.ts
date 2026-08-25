@@ -7,7 +7,7 @@
 // strings live here as plain data + tiny formatters, so render.ts stays pure
 // and unit-testable in both languages.
 
-import { PaceLevel } from "./metrics";
+import { PaceLevel, CostDirection } from "./metrics";
 
 export type Lang = "en" | "ru";
 export type LangSetting = "auto" | "en" | "ru";
@@ -47,14 +47,13 @@ export interface Messages {
   codexTitle: string;
   codexQuotaHeader: string;
   codexAppServerLine: (source: string, plan: string | null, userAgent: string | null) => string;
-  codexCostCompact: (withCache: string, noCache: string, mult: string) => string;
+  codexCostCompact: (withCache: string, noCache: string, mult: string | null, dir: CostDirection) => string;
   codexUsageWaitingCompact: string;
   codexContextShortUnavailable: string;
   codexContextWaitingLine: string;
   codexContextWaitingPanel: string;
   codexPanelTitle: string;
   codexPanelCostLabel: string;
-  codexPanelNoCacheLabel: string;
   codexPanelSavedLabel: string;
   codexLowerMult: (mult: string) => string;
   codexPanelUsageWaiting: string;
@@ -101,9 +100,12 @@ export interface Messages {
   panelSubagentsSummary: (count: number, total: string, share: string) => string;
   panelSubagentsNote: string;
   /** One muted line under the delegated-work summary: how much of what the
-   *  agents spent went on reloading context after a pause. Shown only above the
-   *  threshold — an advisory line that is always there is noise. */
-  panelSubagentsRebuild: (cost: string) => string;
+   *  agents spent went on reloading context after a pause, and what share of
+   *  their spend that is — the yardstick a per-agent % is read against. Shown
+   *  only above the threshold — an advisory line that is always there is noise. */
+  panelSubagentsRebuild: (cost: string, share: string) => string;
+  /** Explains the ≥ marker, shown only when something actually carries it. */
+  panelAtLeastNote: string;
   /** Hover footnote (ⓘ) for that line. The visible line must read without it. */
   panelSubagentsRebuildHint: string;
   /** Appended to the closing note when reloads dominate what the agents wrote.
@@ -111,13 +113,29 @@ export interface Messages {
   panelSubagentsRebuildNote: string;
   /** Tooltip fragment appended to the subagents line, same high bar. */
   subagentsRebuildFragment: (cost: string) => string;
+  /** Link labels for the collapsible agent list. The panel re-renders whole on
+   *  every tick and runs no scripts, so the state lives in the extension and the
+   *  link is a command URI — a plain <details> would snap shut every 10s. */
+  panelSubagentsExpand: string;
+  panelSubagentsCollapse: string;
+  /** Right-hand cell of an agent row: what waiting cost THAT agent, as a share
+   *  of its own spend (0% = it never waited longer than its cache lives) plus
+   *  the tokens, so a big % on a tiny agent cannot read as a big loss. */
+  panelAgentIdle: (pct: string | null, cost: string | null, atLeast: boolean) => string;
+  /** Same cell when the figure cannot be claimed: the agent's cache lifetime was
+   *  never stated, or one of its gaps could not be judged. A `—`, never a `0%` —
+   *  zero would be a claim the transcript does not support. */
+  panelAgentIdleUnknown: string;
+  /** One muted line under the agent list explaining that cell, so the number
+   *  never has to be guessed at — and stating it is not the agent's doing. */
+  panelAgentIdleLegend: string;
   /** The LEAD's own reloads, muted, in Details — raw tokens, no advice: the
    *  owner stepping away is not a defect. */
   detailsRebuild: (tokens: string) => string;
   // tooltip
   title: string;
   // token-equivalent headline: one compact line (with cache · without · ×lower)
-  costCompact: (withCache: string, noCache: string, mult: string) => string;
+  costCompact: (withCache: string, noCache: string, mult: string | null, dir: CostDirection) => string;
   // muted technical breakdown (tooltip + panel "Details")
   detailsLine: (work: string, cacheRead: string, cacheWrite: string) => string;
   // context window fill
@@ -167,8 +185,26 @@ export interface Messages {
   // webview panel (plain text — HTML provides the styling)
   tok: string;
   panelCostLabel: string; // "Token-equivalent with cache" / "Токен-эквивалент с кэшем"
-  panelNoCacheLabel: string; // "Without cache" / "Без кэша было бы"
   panelSavedLabel: string; // "Cache saved" / "Сэкономлено кэшем"
+  /** The comparison, as a VISIBLE line under the headline number: what the same
+   *  session would have cost with nothing reused. It is the one figure that says
+   *  what the cache is doing for you, so it is not left to a hover. */
+  panelCostCompare: (noCache: string, mult: string | null, dir: CostDirection) => string;
+  /** Replaces the "cache saved" footnote while the with-cache figure is NOT the
+   *  smaller one. Two texts, because there are two different causes and naming
+   *  the wrong one invents a fact: `Warmup` when this session has written to
+   *  cache (a write is priced above a fresh token and earns that back on later
+   *  reads), `Weight` when it has not — then the only thing that can invert the
+   *  comparison is a `cacheReadWeight` set above 1. Codex always gets `Weight`:
+   *  it does not report cache writes at all. */
+  panelCostWarmupHint: string;
+  panelCostWeightHint: string;
+  /** …and the third case: no cache activity at all, so the two figures are the
+   *  same number for a reason that has nothing to do with pricing. */
+  panelCostNoCacheHint: string;
+  /** …and the fourth: the cache IS working, but at the current weights it adds
+   *  nothing to the figure either way. Naming a cause there would invent one. */
+  panelCostEvenHint: string;
   lowerMult: (mult: string) => string; // "(~6.8× lower)" / "(в ~6.8× меньше)"
   panelTokenCostNote: string;
   panelDetailsHeader: string; // "Details" / "Детали"
@@ -210,8 +246,15 @@ const EN: Messages = {
   codexQuotaHeader: "**Subscription quota (real, from server):**",
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · plan ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
-  codexCostCompact: (withCache, noCache, mult) =>
-    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
+  codexCostCompact: (withCache, noCache, mult, dir) =>
+    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
+    (dir === "same"
+      ? " (about the same so far)"
+      : !mult
+      ? ""
+      : dir === "more"
+      ? ` (~${mult}× lower)`
+      : ` (~${mult}× higher — cached input is priced above fresh input here)`),
   codexUsageWaitingCompact: "token-equivalent with cache: will appear after the next Codex response",
   codexContextShortUnavailable: "$(info) ctx n/a",
   codexContextWaitingLine: "context: waiting for the next Codex response",
@@ -219,7 +262,6 @@ const EN: Messages = {
     "Context will appear after the next Codex response. Codex does not expose this number for older history yet.",
   codexPanelTitle: "Codex — Session Usage",
   codexPanelCostLabel: "Token-equivalent with cache",
-  codexPanelNoCacheLabel: "Without cache",
   codexPanelSavedLabel: "Cache saved",
   codexLowerMult: (mult) => `(~${mult}× lower)`,
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
@@ -265,20 +307,54 @@ const EN: Messages = {
     `${count} subagent${count === 1 ? "" : "s"} · ≈ ${total} tok — ${share}% of this session's consumption`,
   panelSubagentsNote:
     "Models here are chosen by the agent that spawned each worker — the Lead, or another agent when depth > 1. Ask for a specific model in your task if a cheaper one would do: this is where delegated tokens actually go.",
-  panelSubagentsRebuild: (cost) =>
-    `of that, ≈ ${cost} went on reloading context after pauses — an agent's cache stays warm for 5 minutes`,
+  panelSubagentsRebuild: (cost, share) =>
+    `of that, ${cost} (${share} of what the agents spent) went on reloading context after pauses — an agent's cache usually stays warm for 5 minutes`,
   panelSubagentsRebuildHint:
-    "While an agent waits, its cache goes cold — 5 minutes for subagents, 1 hour for the main session. " +
+    "While an agent waits, its cache goes cold — usually 5 minutes for a subagent, an hour for the main " +
+    "session, though each stream's own lifetime is read from its transcript rather than assumed. " +
     "After a long enough pause it loads its whole context again and pays for that as a new cache write. " +
     "This is how many tokens went into such reloads. A pause is sometimes unavoidable, but it is paid for " +
     "all the same — which is why the figure is shown as it is.",
   panelSubagentsRebuildNote:
-    "Usually an agent left open while another one works. Past five minutes of waiting, a fresh agent costs less than the one that waited.",
+    "Usually an agent left open while another one works. Past its cache's lifetime — five minutes for most agents — it pays to load its whole context again, which is often more than starting a fresh agent with a smaller prompt.",
   subagentsRebuildFragment: (cost) => `${cost} reloaded after pauses`,
+  panelSubagentsExpand: "Show each agent ▾",
+  panelSubagentsCollapse: "Hide the agent list ▴",
+  panelAgentIdle: (pct, cost, atLeast) =>
+    pct && cost
+      ? atLeast
+        ? `idle ≥ ${pct}% (≥ ${cost})`
+        : `idle ${pct}% (≈ ${cost})`
+      : pct
+      ? atLeast
+        ? `idle ≥ ${pct}%`
+        : `idle ${pct}%`
+      : cost
+      ? atLeast
+        ? `idle ≥ ${cost}`
+        : `idle ≈ ${cost}`
+      : "idle —",
+  panelAgentIdleUnknown: "idle —",
+  panelAgentIdleLegend:
+    "idle — the share of that agent's own spend that went on loading its context again after a pause. " +
+    "0% means no waiting cost was measured for it — every pause it took was judged, and none of them " +
+    "priced to anything; " +
+    "a dash means the log did not allow the measurement, which is a different thing from zero. " +
+    "It is not the agent's doing either way: the cache went cold while it was left open.",
+  panelAtLeastNote:
+    "≥ marks a figure measured from part of the log only: some pauses could not be judged, so the real " +
+    "number can be higher, never lower.",
   detailsRebuild: (tokens) => `after-idle reloads ${tokens}`,
   title: "**Claude Code — session usage**",
-  costCompact: (withCache, noCache, mult) =>
-    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** (~${mult}× lower)`,
+  costCompact: (withCache, noCache, mult, dir) =>
+    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
+    (dir === "same"
+      ? " (about the same so far)"
+      : !mult
+      ? ""
+      : dir === "more"
+      ? ` (~${mult}× lower)`
+      : ` (~${mult}× higher so far)`),
   detailsLine: (work, cacheRead, cacheWrite) =>
     `work (in+out) ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
   contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
@@ -322,8 +398,30 @@ const EN: Messages = {
   panelTitle: "Claude Code — Session Usage",
   tok: "tok",
   panelCostLabel: "Token-equivalent with cache",
-  panelNoCacheLabel: "Without cache",
   panelSavedLabel: "Cache saved",
+  panelCostCompare: (noCache, mult, dir) =>
+    dir === "same"
+      ? `without cache ≈ ${noCache} tok — about the same so far`
+      : !mult
+      ? `without cache ≈ ${noCache} tok`
+      : dir === "more"
+      ? `without cache ≈ ${noCache} tok — ~${mult}× more`
+      : `without cache ≈ ${noCache} tok — ~${mult}× less, so far`,
+  panelCostWarmupHint:
+    "The cache has not earned back what it cost yet. A cache write is charged at more than a fresh input " +
+    "token (1-hour ×2.0, 5-minute ×1.25). While the premium those writes pay is bigger than what the " +
+    "reads save, the with-cache figure is the larger of the two. At the default read weight (0.1) each " +
+    "later read on the same cache narrows that gap.",
+  panelCostWeightHint:
+    "Cached input is priced above fresh input here, so reusing the cache does not lower this figure. " +
+    "That is this extension's `ccStatusbar.cacheReadWeight` setting, not something the provider charges: " +
+    "at its default (0.1) a cached token counts as a tenth of a fresh one.",
+  panelCostNoCacheHint:
+    "Nothing has been read from or written to cache in this session yet, so the two figures are the " +
+    "same number. At the default weights a difference appears as soon as the cache is used.",
+  panelCostEvenHint:
+    "The cache is being used, but at the weights in your settings it is not moving this figure either " +
+    "way. The default weights (cache read 0.1) make reuse cheaper.",
   lowerMult: (mult) => `(~${mult}× lower)`,
   panelTokenCostNote:
     "Calculated from real local token counters. The cache multiplier is this extension's token-equivalent estimate, not a money price.",
@@ -346,7 +444,7 @@ const EN: Messages = {
   panelCacheTierHint:
     "How long your prompt cache stays warm while you are idle — read from this session, not configured. " +
     "1-hour: a subscription within its plan limit, so stepping away for up to an hour stays cheap. " +
-    "5-minute: an API key, paid usage after you pass your plan limit, or subagents — short breaks rebuild the cache and cost more. " +
+    "5-minute: an API key, paid usage after you pass your plan limit, or (usually) a subagent — short breaks rebuild the cache and cost more. " +
     "Check it once to know how long a break you can take; you do not need to watch it.",
   panelCacheHitLabel: "Input from cache",
   panelCacheHitHint:
@@ -390,8 +488,15 @@ const RU: Messages = {
   codexQuotaHeader: "**Тариф (реальный, с сервера):**",
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · план ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
-  codexCostCompact: (withCache, noCache, mult) =>
-    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
+  codexCostCompact: (withCache, noCache, mult, dir) =>
+    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
+    (dir === "same"
+      ? " (пока примерно столько же)"
+      : !mult
+      ? ""
+      : dir === "more"
+      ? ` (в ~${mult}× меньше)`
+      : ` (в ~${mult}× больше — ввод из кэша здесь оценён дороже свежего)`),
   codexUsageWaitingCompact: "токен-эквивалент с кэшем: появится после следующего ответа Codex",
   codexContextShortUnavailable: "$(info) конт н/д",
   codexContextWaitingLine: "контекст: появится после следующего ответа Codex",
@@ -399,7 +504,6 @@ const RU: Messages = {
     "Контекст появится после следующего ответа Codex. Для старой истории Codex пока не отдаёт это число.",
   codexPanelTitle: "Codex — расход сессии",
   codexPanelCostLabel: "Токен-эквивалент с кэшем",
-  codexPanelNoCacheLabel: "Без кэша было бы",
   codexPanelSavedLabel: "Сэкономлено кэшем",
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
@@ -445,20 +549,54 @@ const RU: Messages = {
     `${count} ${pluralRu(count, "саб-агент", "саб-агента", "саб-агентов")} · ≈ ${total} ток — ${share}% расхода этой сессии`,
   panelSubagentsNote:
     "Модель выбирает тот, кто запустил агента: лид — или другой агент, если уровень больше 1. Если задача проще, попросите конкретную модель прямо в ТЗ: именно сюда уходят делегированные токены.",
-  panelSubagentsRebuild: (cost) =>
-    `из них ≈ ${cost} ушло на повторную загрузку контекста после пауз — кэш агента держится 5 минут`,
+  panelSubagentsRebuild: (cost, share) =>
+    `из них ${cost} (${share} расхода агентов) ушло на повторную загрузку контекста после пауз — кэш агента обычно держится 5 минут`,
   panelSubagentsRebuildHint:
-    "Пока агент ждёт, его кэш остывает — 5 минут у субагентов, 1 час у основной сессии. " +
+    "Пока агент ждёт, его кэш остывает — обычно 5 минут у субагента и час у основной сессии, но срок " +
+    "жизни каждого кэша читается из его же журнала, а не предполагается. " +
     "После долгой паузы он загружает весь свой контекст заново и платит за это как за новую запись. " +
     "Здесь показано, сколько токенов ушло на такие повторные загрузки. Пауза бывает вынужденной, " +
     "но оплачена она в любом случае — поэтому цифра показана как есть.",
   panelSubagentsRebuildNote:
-    "Обычно это агент, оставленный открытым, пока работает другой. После пяти минут ожидания новый агент обходится дешевле, чем тот, который ждал.",
+    "Обычно это агент, оставленный открытым, пока работает другой. После того, как его кэш отжил своё — у большинства агентов это пять минут, — он платит за повторную загрузку всего контекста, а это часто дороже, чем запустить нового агента с коротким заданием.",
   subagentsRebuildFragment: (cost) => `${cost} на повторную загрузку после пауз`,
+  panelSubagentsExpand: "Показать по агентам ▾",
+  panelSubagentsCollapse: "Свернуть список агентов ▴",
+  panelAgentIdle: (pct, cost, atLeast) =>
+    pct && cost
+      ? atLeast
+        ? `простой ≥ ${pct}% (≥ ${cost})`
+        : `простой ${pct}% (≈ ${cost})`
+      : pct
+      ? atLeast
+        ? `простой ≥ ${pct}%`
+        : `простой ${pct}%`
+      : cost
+      ? atLeast
+        ? `простой ≥ ${cost}`
+        : `простой ≈ ${cost}`
+      : "простой —",
+  panelAgentIdleUnknown: "простой —",
+  panelAgentIdleLegend:
+    "простой — доля расхода самого агента, ушедшая на повторную загрузку его контекста после паузы. " +
+    "0% значит, что расхода на ожидание у него не обнаружено — все паузы измерены, и ни одна ничего " +
+    "не стоила; " +
+    "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль. " +
+    "И в том, и в другом случае это не вина агента: кэш остыл, пока его держали открытым.",
+  panelAtLeastNote:
+    "Знак ≥ значит, что цифра измерена не по всему журналу: часть пауз оценить не удалось, поэтому " +
+    "настоящее число может быть больше, но не меньше.",
   detailsRebuild: (tokens) => `повторные загрузки после простоя ${tokens}`,
   title: "**Claude Code — расход сессии**",
-  costCompact: (withCache, noCache, mult) =>
-    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** (в ~${mult}× меньше)`,
+  costCompact: (withCache, noCache, mult, dir) =>
+    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
+    (dir === "same"
+      ? " (пока примерно столько же)"
+      : !mult
+      ? ""
+      : dir === "more"
+      ? ` (в ~${mult}× меньше)`
+      : ` (пока в ~${mult}× больше)`),
   detailsLine: (work, cacheRead, cacheWrite) =>
     `работа (ввод+вывод) ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
   contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
@@ -502,8 +640,30 @@ const RU: Messages = {
   panelTitle: "Claude Code — расход сессии",
   tok: "ток",
   panelCostLabel: "Токен-эквивалент с кэшем",
-  panelNoCacheLabel: "Без кэша было бы",
   panelSavedLabel: "Сэкономлено кэшем",
+  panelCostCompare: (noCache, mult, dir) =>
+    dir === "same"
+      ? `без кэша было бы ≈ ${noCache} ток — пока примерно столько же`
+      : !mult
+      ? `без кэша было бы ≈ ${noCache} ток`
+      : dir === "more"
+      ? `без кэша было бы ≈ ${noCache} ток — в ~${mult}× больше`
+      : `без кэша было бы ≈ ${noCache} ток — пока в ~${mult}× меньше`,
+  panelCostWarmupHint:
+    "Кэш пока не вернул того, что стоил. Запись в кэш дороже свежего входного токена (часовая ×2.0, " +
+    "пятиминутная ×1.25). Пока эта надбавка за записи больше, чем экономия на чтениях, число с кэшем " +
+    "оказывается больше. При весе чтения по умолчанию (0.1) каждое следующее чтение из того же кэша " +
+    "сокращает разрыв.",
+  panelCostWeightHint:
+    "Ввод из кэша здесь оценён дороже свежего, поэтому переиспользование кэша это число не уменьшает. " +
+    "Так настроен параметр `ccStatusbar.cacheReadWeight` самого расширения, это не цена провайдера: " +
+    "по умолчанию (0.1) токен из кэша считается за десятую часть свежего.",
+  panelCostNoCacheHint:
+    "В этой сессии кэш ещё не читался и не записывался, поэтому оба числа одинаковые. " +
+    "При весах по умолчанию разница появится, как только кэш начнёт работать.",
+  panelCostEvenHint:
+    "Кэш работает, но при весах из ваших настроек он это число не меняет ни в одну сторону. " +
+    "При весах по умолчанию (чтение кэша 0.1) переиспользование дешевле.",
   lowerMult: (mult) => `(в ~${mult}× меньше)`,
   panelTokenCostNote:
     "Рассчитано из реальных локальных счётчиков токенов. Коэффициент кэша — токен-эквивалент расширения, не денежная цена.",
@@ -526,7 +686,7 @@ const RU: Messages = {
   panelCacheTierHint:
     "Сколько prompt-кэш остаётся «тёплым», пока вы не печатаете — определяется из этой сессии, не настраивается. " +
     "Часовой: подписка в пределах лимита плана — можно отойти на час, и это дёшево. " +
-    "5-минутный: API-ключ, платный расход после превышения плана или субагенты — короткие паузы перестраивают кэш и стоят дороже. " +
+    "5-минутный: API-ключ, платный расход после превышения плана или (обычно) субагент — короткие паузы перестраивают кэш и стоят дороже. " +
     "Достаточно глянуть один раз, чтобы понять, какую паузу можно себе позволить; постоянно следить не нужно.",
   panelCacheHitLabel: "Ввод из кэша",
   panelCacheHitHint:

@@ -3,6 +3,7 @@
   "ccStatusbar.cmd.toggleQuota": "Claude/Codex Statusbar: Toggle 5h/7d quota polling",
   "ccStatusbar.cmd.switchLanguage": "Claude/Codex Statusbar: Switch language",
   "ccStatusbar.cmd.openPanel": "Claude/Codex Statusbar: Open usage panel",
+  "ccStatusbar.cmd.toggleDelegated": "Claude/Codex Statusbar: Show/hide the agent list in the panel",
   "ccStatusbar.cmd.selectProvider": "Claude/Codex Statusbar: Select provider",
   "ccStatusbar.cmd.useAuto": "Claude/Codex Statusbar: Use automatic provider",
   "ccStatusbar.cmd.useClaude": "Claude/Codex Statusbar: Use Claude Code provider",

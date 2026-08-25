@@ -87,7 +87,9 @@ export interface SubagentInfo {
   parentAgentId: string | null;
   totals: Totals;
   lastTurnMs: number;
-  /** What this agent's own idle gaps cost — see IdleRebuild. */
+  /** What this agent's own idle gaps cost — see IdleRebuild. Its `unjudged`
+   *  count is what tells "this agent never waited" apart from "its log does not
+   *  allow the measurement", so the panel never has to guess. */
   rebuild: IdleRebuild;
 }
 

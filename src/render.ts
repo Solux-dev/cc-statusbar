@@ -13,7 +13,12 @@ import {
   ScopedQuotaWindow,
   PaceLevel,
   IdleRebuild,
+  CacheTier,
+  CostDirection,
+  CACHE_WRITE_WEIGHT_1H,
+  CACHE_WRITE_WEIGHT_5M,
   effectiveTokens,
+  costDirection,
   rebuildCost,
   fmtTokens,
   fmtMult,
@@ -112,7 +117,77 @@ export interface SubagentView {
   spawnDepth?: number | null;
   /** Cache-weighted token-equivalent, same metric as the session headline. */
   effective: number;
+  /** What THIS agent's own idle gaps cost, so the list can say which agent paid
+   *  for waiting instead of only naming a total for all of them. Carries its own
+   *  `unjudged` count, which is what decides whether a zero may be shown. */
+  rebuild?: IdleRebuild;
 }
+
+/** What waiting cost ONE agent, ready for its row: the token-equivalent and the
+ *  share of that agent's own spend it ate. Self-normalising on purpose — a short
+ *  agent that never waited reads 0%, which is the truth, whereas a cache-hit
+ *  rate would score it low for having nothing to reuse yet.
+ *
+ *  What decides whether a figure may be shown is `rebuild.unjudged`, NOT whether
+ *  a cache lifetime was read: a lifetime is needed to judge a GAP, and a stream
+ *  with no gaps has nothing to judge (a one-turn agent is a truthful 0%). When
+ *  gaps went unjudged, a zero is not "it never waited" but "we cannot tell", and
+ *  a non-zero figure is a lower bound — `atLeast` says so. Pure. */
+export function agentIdle(
+  a: SubagentView,
+  weights: Weights
+): { known: boolean; cost: number; pctText: string | null; atLeast: boolean } {
+  // An agent that spent nothing has no share to state: 0/0 is not a zero, it is
+  // the absence of a measurement (an empty log, a log of placeholders, a read
+  // that failed). Checked FIRST, or the zero below would answer for it.
+  if (!a.rebuild || a.effective <= 0) return { known: false, cost: 0, pctText: null, atLeast: false };
+  const cost = rebuildCost(a.rebuild, weights);
+  const unjudged = a.rebuild.unjudged > 0;
+  if (cost <= 0) {
+    return unjudged
+      ? { known: false, cost: 0, pctText: null, atLeast: false }
+      : { known: true, cost: 0, pctText: "0", atLeast: false };
+  }
+  // A floor is FLOORED, never rounded: "≥ 2%" on a measured 1.6% claims more
+  // than was measured, which is the one thing the marker exists to prevent.
+  const pct = unjudged ? Math.floor((cost / a.effective) * 100) : Math.round((cost / a.effective) * 100);
+  // "<1" is an UPPER bound on what was measured, so it cannot also carry a floor
+  // from what was not: with unjudged gaps under 1%, the tokens are stated as a
+  // floor and the share is left out rather than stated two ways at once.
+  if (unjudged && pct === 0) return { known: true, cost, pctText: null, atLeast: true };
+  // A real loss must never print as "0%" — in a cell about what waiting cost,
+  // that reads as "it cost nothing". Same rule as the section's own share.
+  return { known: true, cost, pctText: pct === 0 ? "<1" : String(pct), atLeast: unjudged };
+}
+
+/** Why the with-cache figure is NOT the smaller one. Each side is priced
+ *  against reading the same input fresh, so its contribution is what it adds
+ *  over that: reads add `cacheRead × (weight − 1)`, writes add the tiered price
+ *  minus the tokens themselves. The bigger positive contribution is the cause;
+ *  zero contribution on both sides means the cache is simply not moving this
+ *  number, which is a different sentence from either cause. Pure. */
+export function costCauseHint(totals: Totals, weights: Weights, m: Messages): string {
+  if (totals.cacheRead === 0 && totals.cacheWrite === 0) return m.panelCostNoCacheHint;
+  const readDelta = totals.cacheRead * (weights.cacheRead - 1);
+  const writeDelta =
+    CACHE_WRITE_WEIGHT_1H * totals.cacheWrite1h +
+    CACHE_WRITE_WEIGHT_5M * totals.cacheWrite5m +
+    weights.cacheWrite * totals.cacheWriteUnknown -
+    totals.cacheWrite;
+  // The NET is what the footnote explains. Two components that cancel out leave
+  // a cache that has earned back exactly what it cost — calling that a warm-up
+  // because one half of the arithmetic is positive explains a number nobody is
+  // looking at. (A net below zero can only arrive here through display
+  // rounding — a saving too small to change either figure — and "it does not
+  // move this figure" is exactly the truth in that case.)
+  if (readDelta + writeDelta <= 0) return m.panelCostEvenHint;
+  return writeDelta >= readDelta ? m.panelCostWarmupHint : m.panelCostWeightHint;
+}
+
+/** The one command a panel link may run: it flips the agent list open/closed.
+ *  Exported so the registration, the package.json contribution and the link
+ *  cannot drift apart (a test pins all three). */
+export const DELEGATED_TOGGLE_COMMAND = "ccStatusbar.toggleDelegated";
 
 /** Group subagents by model+effort — the answer to "which models did the Lead
  *  hand my work to, and what did each cost". Sorted by spend, biggest first, so
@@ -258,7 +333,11 @@ export function rebuildDisplay(
 function detailsText(totals: Totals, rebuild: RebuildView | undefined, m: Messages): string {
   const base = m.detailsLine(fmtTokens(totals.work), fmtTokens(totals.cacheRead), fmtTokens(totals.cacheWrite));
   const lead = rebuild?.lead;
-  return lead && lead.tokens > 0 ? `${base} · ${m.detailsRebuild(fmtTokens(lead.tokens))}` : base;
+  if (!lead || lead.tokens <= 0) return base;
+  // Same completeness rule as the panel rows: where part of the log could not be
+  // judged, this is a floor. A quieter line is still a claim.
+  const value = `${lead.unjudged > 0 ? "≥ " : ""}${fmtTokens(lead.tokens, lead.unjudged > 0)}`;
+  return `${base} · ${m.detailsRebuild(value)}`;
 }
 
 /** One compact tooltip line: how much of this session was delegated, to which
@@ -283,7 +362,10 @@ function subagentTooltipLine(
   // The hover is already dense: the reload fragment clears the same high bar as
   // the guidance sentence, or it is not there at all.
   const reb = rebuildDisplay(rebuild, sessionEffective, weights);
-  if (reb.advise) shown.push(m.subagentsRebuildFragment(fmtTokens(reb.cost)));
+  if (reb.advise) {
+    const bounded = (rebuild?.unjudged ?? 0) > 0;
+    shown.push(m.subagentsRebuildFragment(`${bounded ? "≥ " : ""}${fmtTokens(reb.cost, bounded)}`));
+  }
   return m.subagentsLine(list.length, fmtTokens(total), shown.join(" · "));
 }
 
@@ -365,7 +447,9 @@ function codexCacheLine(details: CodexQuotaDetails, m: Messages): string | null 
   return null;
 }
 
-function codexEconomy(details: CodexQuotaDetails): { effective: number; noCache: number; saved: number; mult: string; work: number } | null {
+function codexEconomy(
+  details: CodexQuotaDetails
+): { effective: number; noCache: number; saved: number; mult: string | null; dir: CostDirection; work: number } | null {
   if (!details.usage) return null;
   const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
   const cachedInput = Math.max(0, details.usage.cachedInputTokens);
@@ -380,7 +464,7 @@ function codexEconomy(details: CodexQuotaDetails): { effective: number; noCache:
     effective,
     noCache,
     saved,
-    mult: effective > 0 ? fmtMult(noCache / effective) : "1",
+    ...costDirection(effective, noCache),
     work,
   };
 }
@@ -388,7 +472,7 @@ function codexEconomy(details: CodexQuotaDetails): { effective: number; noCache:
 function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
   const economy = codexEconomy(details);
   if (!economy) return m.codexUsageWaitingCompact;
-  return m.codexCostCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache), economy.mult);
+  return m.codexCostCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache), economy.mult, economy.dir);
 }
 
 function codexDetailsLine(details: CodexQuotaDetails, m: Messages): string {
@@ -480,7 +564,7 @@ export function buildView(
   const eff = effectiveTokens(totals, weights);
   // raw face-value cost if caching didn't exist: every token at 1× price.
   const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
-  const mult = eff > 0 ? fmtMult(noCache / eff) : "1";
+  const { dir: costDir, mult } = costDirection(eff, noCache);
 
   // ── collapsed bar: tariff dots + (optional) context segment ──
   const segs: string[] = [];
@@ -556,7 +640,7 @@ export function buildView(
     t.push(RULE);
     t.push("");
   }
-  t.push(m.costCompact(fmtTokens(eff), fmtTokens(noCache), mult));
+  t.push(m.costCompact(fmtTokens(eff), fmtTokens(noCache), mult, costDir));
   t.push("");
 
   const quotaLine = (label: string, w: QuotaWindow | null, windowSec: number): string => {
@@ -768,13 +852,18 @@ export function buildPanelHtml(
   model?: ModelView,
   subagents?: SubagentView[],
   leadEffective?: number,
-  rebuild?: RebuildView
+  rebuild?: RebuildView,
+  /** Is the per-agent list open? The panel runs no scripts and is re-rendered
+   *  whole on every tick, so a plain <details> would snap shut every 10 seconds:
+   *  the state has to live in the extension and come back in here. */
+  delegatedExpanded = false
 ): string {
   const m = messages(lang);
   const eff = effectiveTokens(totals, weights);
   const noCache = totals.work + totals.cacheRead + totals.cacheWrite;
   const saved = Math.max(0, noCache - eff);
-  const mult = eff > 0 ? fmtMult(noCache / eff) : "1";
+  // Never assume the comparison points the way we hope — see costDirection.
+  const { dir: costDir, mult } = costDirection(eff, noCache);
 
   // Identity only — which model and effort produced the numbers below. The page
   // now opens on "how much have I got left" (quota), so the token-equivalent
@@ -932,17 +1021,42 @@ export function buildPanelHtml(
     // "that's all of them".
     const LIST_CAP = 12;
     const shown = subagents.slice(0, LIST_CAP);
+    // The idle cell is offered only when at least one row can actually carry a
+    // number: a column of "—" teaches nothing and costs every row its width.
+    const idles = shown.map((a) => agentIdle(a, weights));
+    const anyIdle = idles.some((i) => i.known);
     const listRows = shown
-      .map((a) => {
+      .map((a, i) => {
         const depth = a.spawnDepth && a.spawnDepth > 1 ? m.subagentDepth(a.spawnDepth) : null;
         const who = [a.agentType || "agent", a.modelLabel || "?", a.effort || null, depth]
           .filter(Boolean)
           .join(" · ");
         const what = a.description ? ` — ${a.description}` : "";
-        return `<div class="arow"><b>≈ ${fmtTokens(a.effective)}</b><span>${esc(who)}${esc(what)}</span></div>`;
+        const idle = idles[i];
+        // Tokens beside the % on purpose: 31% of a small agent is a rounding
+        // error, 31% of a large one is worth changing how you work.
+        const idleCell = !anyIdle
+          ? ""
+          : `<span class="idle">${esc(
+              idle.known
+                ? m.panelAgentIdle(
+                    idle.pctText,
+                    idle.cost > 0 ? fmtTokens(idle.cost, idle.atLeast) : null,
+                    idle.atLeast
+                  )
+                : m.panelAgentIdleUnknown
+            )}</span>`;
+        return `<div class="arow"><b>≈ ${fmtTokens(a.effective)}</b><span>${esc(who)}${esc(what)}</span>${idleCell}</div>`;
       })
       .join("");
     const more = subagents.length > LIST_CAP ? `<div class="sub">${esc(m.subagentsMore(subagents.length - LIST_CAP))}</div>` : "";
+    // The ≥ is explained only where one is actually shown — an explanation of a
+    // marker nobody can see is just more text to read.
+    const idleLegend = anyIdle
+      ? `<div class="sub">${esc(
+          idles.some((i) => i.atLeast) ? `${m.panelAgentIdleLegend} ${m.panelAtLeastNote}` : m.panelAgentIdleLegend
+        )}</div>`
+      : "";
 
     // What waiting cost. One muted line in the same style as the summary above
     // it, carrying three facts: how much, why, and how long an agent's cache
@@ -950,38 +1064,76 @@ export function buildPanelHtml(
     // already thinking about agents, so it costs one line and no new section.
     // WEIGHTED tokens, like every figure in this section.
     const reb = rebuildDisplay(rebuild?.subagents, eff, weights);
+    // Share of what the AGENTS spent, not of the session: it is the yardstick
+    // for the per-agent percentages right below it, so both must divide by the
+    // same thing or the reader compares two different scales.
+    // Marked as a lower bound when any agent had a gap we could not judge: the
+    // reloads we DID measure are real, the ones we could not are not zero. A
+    // bound is floored, not rounded — see fmtTokens(…, floor).
+    const rebUnjudged = (rebuild?.subagents?.unjudged ?? 0) > 0;
+    const rawShare = subTotal > 0 ? (reb.cost / subTotal) * 100 : 0;
+    const rebShare = rebUnjudged ? Math.floor(rawShare) : Math.round(rawShare);
+    const rebShareText = rebShare === 0 && reb.cost > 0 ? "<1" : String(rebShare);
+    const rebAtLeast = rebUnjudged && rebShare > 0;
     const rebuildRow = reb.show
-      ? `<div class="sub">${hintSpan(m.panelSubagentsRebuild(fmtTokens(reb.cost)), m.panelSubagentsRebuildHint)}</div>`
+      ? `<div class="sub">${hintSpan(
+          m.panelSubagentsRebuild(
+            `${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`,
+            `${rebAtLeast ? "≥" : ""}${rebShareText}%`
+          ),
+          rebAtLeast ? `${m.panelSubagentsRebuildHint} ${m.panelAtLeastNote}` : m.panelSubagentsRebuildHint
+        )}</div>`
       : "";
-    // The guidance sentence leads the closing note rather than starting a
-    // paragraph of its own — no new block of text for one sentence.
-    const note = reb.advise ? `${m.panelSubagentsRebuildNote} ${m.panelSubagentsNote}` : m.panelSubagentsNote;
+    // The guidance sentence stays with the number it explains — and stays
+    // visible while the list is collapsed, because it is the actionable half.
+    const adviceRow = reb.advise ? `<div class="sub">${esc(m.panelSubagentsRebuildNote)}</div>` : "";
+
+    // The list is the long part, so it is what collapses. Everything a reader
+    // needs at a glance — how much was delegated, to which models, what waiting
+    // cost — stays visible either way.
+    const toggleRow =
+      `<div class="sub toggle"><a href="command:${DELEGATED_TOGGLE_COMMAND}">` +
+      `${esc(delegatedExpanded ? m.panelSubagentsCollapse : m.panelSubagentsExpand)}</a></div>`;
 
     subagentSection =
       `<h3>${esc(m.panelSubagentsHeader)}</h3>` +
       `<div class="sub">${esc(m.panelSubagentsSummary(subagents.length, fmtTokens(subTotal), shareText))}</div>` +
       rebuildRow +
+      adviceRow +
       gRows +
-      listRows +
-      more +
-      `<div class="sub">${esc(note)}</div>`;
+      (delegatedExpanded
+        ? listRows + more + idleLegend + `<div class="sub">${esc(m.panelSubagentsNote)}</div>`
+        : "") +
+      toggleRow;
   }
 
-  // Token-equivalent — ONE line, at the foot of the page. The reader opens the
-  // panel to learn how much quota is left, not to read a raw token count, and
-  // product-direction.md itself demoted this block to "a quiet optional extra".
-  // The two curiosity figures ("without cache", "cache saved") and the
-  // disclaimer moved into this line's ⓘ: nothing is deleted, it is one hover
-  // away. The hint text is composed from the existing labels, so neither
-  // language can drift out of sync with the other.
+  // Token-equivalent — the headline number, and under it the ONE comparison that
+  // says what the cache is doing for you. That comparison used to sit inside the
+  // ⓘ; a hover is the wrong place for the figure this extension exists to show,
+  // and it was invisible to anyone who never hovers. What stays in the ⓘ is the
+  // derived total ("cache saved", = the difference of the two visible numbers)
+  // and the disclaimer. Composed from the existing labels, so neither language
+  // can drift out of sync with the other.
+  // The saving is only a saving while the comparison points that way. Decided on
+  // the EXACT numbers, not on `costDir`: that field rounds 1.04× to "about the
+  // same", and a rounded presentation state must never be read as the sign — a
+  // cache that has saved 3.6k has still saved something.
   const costHint =
-    `${m.panelNoCacheLabel}: ≈ ${fmtTokens(noCache)} ${m.tok}. ` +
-    `${m.panelSavedLabel}: ≈ ${fmtTokens(saved)} ${m.tok} ${m.lowerMult(mult)}. ` +
-    m.panelTokenCostNote;
+    noCache > eff
+      ? `${m.panelSavedLabel}: ≈ ${fmtTokens(saved)} ${m.tok}` +
+        // no multiplier when the line above has just called the two the same
+        `${mult && costDir === "more" ? ` ${m.lowerMult(mult)}` : ""}. ${m.panelTokenCostNote}`
+      : // Which cause is named matters, and "a write exists" is not the same
+        // question as "a write is what moved this number". Both sides are priced
+        // against a fresh token, so each one's CONTRIBUTION is what it adds over
+        // reading that input fresh — and the bigger positive contribution is the
+        // cause. With no contribution at all, no cause is named.
+        `${costCauseHint(totals, weights, m)} ${m.panelTokenCostNote}`;
   const costSection =
     `<div class="sep"></div>` +
     `<div class="row">${hintSpan(m.panelCostLabel, costHint)}` +
-    `<b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>`;
+    `<b>≈ ${fmtTokens(eff)} ${esc(m.tok)}</b></div>` +
+    `<div class="sub">${esc(m.panelCostCompare(fmtTokens(noCache), mult, costDir))}</div>`;
 
   // muted technical breakdown
   const detailsSection =
@@ -999,9 +1151,16 @@ export function buildPanelHtml(
   /* a subagent's value reads "≈ 27.5k" — wider than the quota column's bare "%" */
   .qrow.sub b { width:auto; min-width:78px; white-space:nowrap; }
   .qrow.sub .verdict { white-space:nowrap; }
-  .arow { display:flex; gap:10px; align-items:baseline; padding:2px 0; font-size:12px; }
+  /* wrap, so a docked side column drops the idle cell onto its own line instead
+     of squeezing the task description into a one-word column */
+  .arow { display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; padding:2px 0; font-size:12px; }
   .arow b { min-width:64px; text-align:right; font-variant-numeric: tabular-nums; }
   .arow span { opacity:.75; overflow-wrap:anywhere; }
+  .arow .idle { margin-left:auto; white-space:nowrap; opacity:.7; font-variant-numeric: tabular-nums; }
+  /* the toggle is a link people must be able to find: no .sub dimming on it */
+  .toggle { opacity:1; padding-top:4px; }
+  .toggle a { color: var(--vscode-textLink-foreground, var(--vscode-foreground)); text-decoration:none; }
+  .toggle a:hover, .toggle a:focus { text-decoration:underline; }
   body { font-family: var(--vscode-font-family); color: var(--vscode-foreground);
          padding: 14px 18px; font-size: 13px; }
   h2 { font-size: 15px; margin: 0 0 12px; }
@@ -1031,10 +1190,10 @@ export function buildPanelHtml(
   <h2>${esc(m.panelTitle)}</h2>
   ${rows.join("\n  ")}
   ${quotaSection}
-  ${subagentSection}
-  ${cacheSection}
   ${costSection}
   ${detailsSection}
+  ${cacheSection}
+  ${subagentSection}
   <div class="legend">${esc(m.panelLegend)}</div>
   ${footHtml(m)}
 </body>
@@ -1062,13 +1221,29 @@ export function buildCodexPanelHtml(
   // page under the reader.
   const costRows: string[] = [];
   if (economy) {
+    // Same rule as the Claude panel, with one difference: Codex does not report
+    // cache writes at all (its Details line says so), so the only thing that can
+    // invert this comparison is the cache-read weight — never a warm-up write.
     const costHint =
-      `${m.codexPanelNoCacheLabel}: ≈ ${fmtTokens(economy.noCache)} ${m.tok}. ` +
-      `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok} ${m.codexLowerMult(economy.mult)}. ` +
-      m.codexPanelTokenCostNote;
+      economy.noCache > economy.effective
+        ? `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok}` +
+          `${economy.mult && economy.dir === "more" ? ` ${m.codexLowerMult(economy.mult)}` : ""}. ` +
+          m.codexPanelTokenCostNote
+        : `${
+            Math.max(0, details.usage?.cachedInputTokens ?? 0) <= 0
+              ? m.panelCostNoCacheHint
+              : economy.noCache === economy.effective
+              ? m.panelCostEvenHint
+              : m.panelCostWeightHint
+          } ${m.codexPanelTokenCostNote}`;
     costRows.push(
       `<div class="row">${hintSpan(m.codexPanelCostLabel, costHint)}` +
         `<b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
+    );
+    // Same visible comparison as the Claude panel — switching provider must not
+    // move a number the reader has learned to look for.
+    costRows.push(
+      `<div class="sub">${esc(m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir))}</div>`
     );
   } else {
     costRows.push(`<div class="row">${hintSpan(m.codexPanelCostLabel, m.codexPanelTokenCostNote)}<b>—</b></div>`);
@@ -1160,9 +1335,9 @@ export function buildCodexPanelHtml(
   ${identityRows.join("\n  ")}
   ${quotaSection}
   ${contextSection}
-  ${cacheSection}
   ${costSection}
   ${detailsSection}
+  ${cacheSection}
   ${footHtml(m)}
 </body>
 </html>`;
