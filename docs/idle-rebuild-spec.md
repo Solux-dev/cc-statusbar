@@ -11,7 +11,7 @@ rule). Extends [`cache-tier-spec.md`](cache-tier-spec.md) — read that first.
 Show **what waiting costs**: when an agent sits idle longer than its cache
 lives, it reloads its whole context and pays for it again — today that spend is
 invisible, and it is 48% of everything our subagents write to cache — 54% once
-each agent's unavoidable first load is set aside. (Re-measured round 16 over 505
+each agent's unavoidable first load is set aside. (Re-measured round 16 over 507
 agent logs: 114.4M reload tokens against 236.8M written in total. The original
 "over half" used the narrower denominator without saying so.)
 
@@ -154,7 +154,7 @@ Every string in this feature obeys all five:
    absolute figure alone means nothing to a first-time reader.
 3. **State only the cause the data carries, and never a verdict.** The
    measurement is a gap longer than the cache's life — it does not say what
-   filled the gap. Measured on 503 agent logs here, 46% of the tokens counted
+   filled the gap. Measured on 507 agent logs here, 46% of the tokens counted
    this way came from gaps whose longest internal silence ran from the agent's
    own `Bash` `tool_use` to its `tool_result` (a test run, a build) rather than
    from an agent sitting idle, so a single named cause would be wrong about half

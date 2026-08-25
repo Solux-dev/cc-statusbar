@@ -1406,11 +1406,13 @@ export function buildCodexPanelHtml(
         : economy.writeInput > 0
         ? ` ${m.codexPanelWritePricedHint(fmtTokens(economy.writeInput))}`
         : "";
-    // Same ordering as `costCauseHint`, minus the "invisible difference" branch:
-    // that one guards a footnote the Claude panel prints beside a comparison it
-    // has already rounded, and this panel reaches it through the same
-    // `costDirection`, so `panelCostEvenHint` below already covers the case the
-    // arithmetic calls level.
+    // Same ordering as `costCauseHint`, invisible-difference branch included.
+    // `panelCostEvenHint` is NOT a substitute for it: that one fires on an exact
+    // arithmetic zero, while this guards a REAL premium the display rounds away.
+    // Pricing the write is what made that state reachable here for the first
+    // time — 1.2M input with a 40k write leaves a 10k premium that both figures
+    // print as `1.2M`, and naming a cause over a difference the page does not
+    // show is the defect rounds 10 and 12 closed on the Claude panel.
     const readW = details.weights?.cacheRead ?? 0.1;
     const writeW = details.weights?.cacheWrite ?? 1.25;
     const readDelta = economy.cachedInput * (readW - 1);
@@ -1429,6 +1431,8 @@ export function buildCodexPanelHtml(
               ? m.codexPanelNoCacheReadHint
               : readDelta + writeDelta <= ZERO_TOLERANCE
               ? m.panelCostEvenHint
+              : fmtTokens(economy.effective) === fmtTokens(economy.noCache) && economy.dir === "same"
+              ? m.panelCostTooSmallHint
               : readDelta > 0 && writeDelta > 0
               ? m.codexPanelBothHint
               : writeDelta >= readDelta

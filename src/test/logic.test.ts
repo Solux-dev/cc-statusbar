@@ -3059,8 +3059,9 @@ test("buildCodexPanelHtml: a cacheReadWeight above 1 inverts Codex too — and i
   assert.match(html, /≈ 185k tok/);
   assert.match(html, /without cache ≈ 105k tok — ~1\.8× less/);
   assert.ok(!/Cache saved/.test(html));
-  // Codex reports no cache WRITES at all, so blaming a warm-up write here would
-  // be an invented cause: the read weight is the only thing that can invert it.
+  // This payload states no write count, so nothing here can be blamed on a
+  // warm-up: the read weight is the only thing that inverted it. (Codex DOES
+  // carry a write counter and a stated one IS priced — see the warm-up test.)
   assert.match(html, /Cached input is priced above fresh input here/);
   assert.ok(!/A cache write is charged at more than a fresh input token/.test(html));
 });
@@ -3889,6 +3890,33 @@ test("a Codex cache write is priced once, at the write weight, never as fresh in
   };
   // 0 ordinary + 3945 x 0.1 + 638 x 1.25 = 1192.
   assert.match(buildCodexPanelHtml(quota, now, "en", overlapping), /≈ 1\.2k/);
+});
+
+test("the Codex panel names no cause over a difference it does not print", () => {
+  // Round 17. The Claude panel got this in rounds 10 and 12; pricing the Codex
+  // write made the same state reachable here for the first time, and the Codex
+  // hint chain had no `invisible` branch. `panelCostEvenHint` is not a stand-in:
+  // it fires on an exact arithmetic zero, while this is a REAL premium the
+  // display rounds away.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  // 1.16M ordinary + 40k written at 1.25 = 1.21M against 1.2M without cache.
+  // A 10k premium, and both figures print as "1.2M".
+  const hidden = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 1_200_000, lastTokens: 1_200_000,
+      inputTokens: 1_200_000, cachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 40_000,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", hidden);
+  assert.match(en, /about the same/);
+  assert.match(en, /by too little to change either figure/);
+  assert.ok(!/the with-cache figure is the larger of the two/.test(en), "…a cause over an invisible difference");
+  assert.ok(!/Both sides of the cache add to this figure here/.test(en));
+  assert.match(buildCodexPanelHtml(quota, now, "ru", hidden), /слишком мала/);
 });
 
 test("a write count Codex never stated is not read as a zero", () => {

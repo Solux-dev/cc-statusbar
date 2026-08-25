@@ -14,7 +14,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   worth changing anything: 31% of a small agent is a rounding error, 31% of a
   large one is worth looking into. The figure says a pause outlasted the cache;
   it does not say what filled the pause, and the panel does not pretend
-  otherwise — on the 503 agent logs measured here, 46% of the tokens counted
+  otherwise — on the 507 agent logs measured here, 46% of the tokens counted
   this way came from pauses whose longest silence ran from the agent's own
   `Bash` call to its result, not from an agent sitting idle.
   `0%` means no waiting cost was measured for that agent: every
@@ -24,7 +24,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   stated to measure that pause against, a turn that cannot be placed in time), or
   where the agent has no measurable spend at all (an empty log, a log of
   placeholders, a read that failed), the row shows `—`, because a zero there
-  would be an invention: on 500 real agent logs that was 1% of them, and when no
+  would be an invention: on those 507 logs that was 1% of them, and when no
   listed agent can be measured the column is left out altogether. Where part of a log could be measured and part
   could not, the figure is marked `≥` — a floor, never presented as the number,
   and floors are truncated rather than rounded, so `≥` never claims more than
@@ -67,7 +67,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   and the advice line under the list opened “usually an agent left open while
   another one works”. What the extension actually measures is a gap between two
   turns longer than the live cache lifetime — it never looks at what filled the
-  gap. Re-measured against 503 agent logs on the author's machine: of the 448
+  gap. Re-measured against 507 agent logs on the author's machine: of the 448
   counted gaps carrying 114.4M tokens, **188 gaps and 52.6M tokens (46%) ran
   from the agent's own `Bash` tool call to its result** — a test suite, a build —
   and 63 of the 193 agents that would show a non-zero figure have it caused
@@ -133,8 +133,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   0.6% share the summary printed `≈ 1.3M (<1%)`, presenting a floor as a
   measurement. The token figure keeps its `≥` now; only the percentage drops it,
   because `≥ <1%` says nothing.
+- **The Codex panel named a cause for a difference it does not print.** Pricing
+  the write made this state reachable there for the first time: 1.2M of input
+  with a 40k write leaves a 10k premium, both figures print as `1.2M`, the line
+  says “about the same” — and the ⓘ used to answer “the with-cache figure is the
+  larger of the two”. The Claude panel has said “by too little to change either
+  figure” since 1.0.26 was in review; the Codex chain was missing that branch,
+  and now has it, with its own test.
+- **One measurement, one denominator.** The same run was published against
+  “500”, “503” and “505” agent logs in different sentences of the same release.
+  Everything now quotes the same 507 logs, re-measured 26 August 2026.
 - **Two published numbers overstated what was measured.** “Over half of
-  everything subagents write to cache” is 48% across the 505 agent logs measured
+  everything subagents write to cache” is 48% across the 507 agent logs measured
   here (114.4M reload tokens against 236.8M written); it reaches 54% only once
   each agent's unavoidable first load is set aside, which the sentence did not
   say. And the Codex sample of “109,746 turns” was a count of field
@@ -251,7 +261,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **What waiting costs.** While an agent sits idle its cache goes cold — 5
   minutes for a subagent, 1 hour for the main session. After a long enough pause
   it loads its whole context again and pays for that as a new cache write. That
-  spend was invisible, and across the 505 agent logs measured here it is **48%**
+  spend was invisible, and across the 507 agent logs measured here it is **48%**
   of everything the subagents write to cache — **54%** once each agent's
   unavoidable first load is set aside. The delegated-work section now says
   how much, in one line:

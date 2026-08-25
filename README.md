@@ -216,11 +216,11 @@ never waited" are different answers. If *none* of the listed agents can
 be measured, the column is left out altogether rather than filling the list with
 dashes. Where part of a log could be measured and part could not, the figure is
 marked `≥` — a floor, truncated rather than rounded, so it never claims more than
-was measured. On 500 real agent logs measured here, 99% carried a
+was measured. On the 507 agent logs measured here (26 August 2026), 99% carried a
 number and 1% showed the dash. A figure above zero means one of that agent's
 pauses outlasted its cache. It does **not** say what filled the pause: the agent
 may have been left open while another one worked, or its own command may have
-run long — a test suite, a build. On the 503 agent logs measured here, 46% of the
+run long — a test suite, a build. On the same 507 logs, 46% of the
 tokens counted this way came from pauses whose longest silence ran from the
 agent's own `Bash` call to its result, so naming one cause would be naming the
 wrong one about half the time.
@@ -236,12 +236,12 @@ name the model you want in the task itself.
 **What waiting costs.** While an agent sits idle its cache goes cold — usually 5
 minutes for a subagent, an hour for the main session, though each stream's own
 lifetime is read from its transcript rather than assumed. After a long enough pause it loads
-its whole context again and pays for that as a new cache write. Across the 505
+its whole context again and pays for that as a new cache write. Across the 507
 agent logs measured here that is **48%** of everything subagents write to cache
 — and **54%** once each agent's unavoidable first load is set aside — so
-the section adds one line when it is worth your attention: *"of that, ≈ 6M went
-on reloading context after pauses — an agent's cache usually stays warm for 5
-minutes"*.
+the section adds one line when it is worth your attention: *"of that, ≈ 6M (15%
+of what the agents spent) went on reloading context after pauses — an agent's
+cache usually stays warm for 5 minutes"*.
 It appears only above a threshold (at least 1M tokens **and** 3% of the
 session), it is never coloured, and the status bar gains nothing — this is
 information, not a quota with consequences. The detection looks at a **pair**,

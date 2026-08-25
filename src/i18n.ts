@@ -68,9 +68,11 @@ export interface Messages {
   codexPanelCostLabel: string;
   codexPanelSavedLabel: string;
   /** Codex's own version of "no cache activity yet". It must NOT be the Claude
-   *  string: Codex states a cache-WRITE counter separately and never says how it
-   *  relates to its input count, so "nothing has been written to cache" is a
-   *  fact this provider does not give us. */
+   *  string: Codex keeps its cache-WRITE count in a counter of its own, which a
+   *  payload may omit entirely, so "nothing has been written to cache" is a fact
+   *  a zero cached-read count does not give us. Shown only when BOTH counts are
+   *  zero — with a write priced in, the two figures differ and this sentence
+   *  would contradict the line beneath it. */
   codexPanelNoCacheReadHint: string;
   /** Codex twins of the two Claude hints that name cache TIERS. Codex states no
    *  cache lifetime, so a write here can only be priced by the unstated-tier
