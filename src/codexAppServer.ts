@@ -43,6 +43,13 @@ export interface CodexTokenUsageBreakdownSnapshot {
   cachedInputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
+  /** Codex DOES carry a cache-write counter (`cache_write_input_tokens` in a
+   *  rollout, `cacheWriteInputTokens` over the app-server). It is optional on
+   *  purpose: older payloads omit it entirely, and requiring it would drop the
+   *  whole breakdown for them. `null` means the payload said nothing, which is
+   *  NOT the same as a stated 0 — every turn measured on this machine states 0,
+   *  and the number is Codex's to state, not ours to assume. */
+  cacheWriteInputTokens: number | null;
 }
 
 export interface CodexThreadTokenUsageSnapshot {
@@ -219,6 +226,15 @@ function conciseError(err: unknown): string {
   return String(err || "unknown error");
 }
 
+/** A stated write count is kept as stated, except that a negative one is not a
+ *  count at all — the same sanitising the Claude side does to its counters. A
+ *  missing field stays `null`: "not stated" and "stated as zero" are different
+ *  answers and the panel says different things about them. */
+function clampWrite(n: number | null): number | null {
+  if (n == null) return null;
+  return Math.max(0, n);
+}
+
 function tokenBreakdown(payload: unknown): CodexTokenUsageBreakdownSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
@@ -236,7 +252,16 @@ function tokenBreakdown(payload: unknown): CodexTokenUsageBreakdownSnapshot | nu
   ) {
     return null;
   }
-  return { totalTokens, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens };
+  return {
+    totalTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    // Absent in older payloads: recorded as "not stated", never as a reason to
+    // reject the breakdown and never rewritten into a zero.
+    cacheWriteInputTokens: clampWrite(numberOrNull(p.cacheWriteInputTokens)),
+  };
 }
 
 function tokenBreakdownFromRollout(payload: unknown): CodexTokenUsageBreakdownSnapshot | null {
@@ -256,7 +281,14 @@ function tokenBreakdownFromRollout(payload: unknown): CodexTokenUsageBreakdownSn
   ) {
     return null;
   }
-  return { totalTokens, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens };
+  return {
+    totalTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    cacheWriteInputTokens: clampWrite(numberOrNull(p.cache_write_input_tokens)),
+  };
 }
 
 export function parseCodexTokenUsageNotification(message: unknown): CodexThreadTokenUsageUpdate | null {

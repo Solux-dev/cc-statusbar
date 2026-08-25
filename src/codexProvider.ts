@@ -29,6 +29,8 @@ export interface CodexTokenBreakdown {
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
+  /** Codex states this counter; older payloads omit it (`null`/absent). */
+  cacheWriteInputTokens?: number | null;
 }
 
 export interface CodexTokenUsage {
@@ -97,7 +99,9 @@ export function codexContext(usage: CodexTokenUsage | null): ContextView | undef
     usedTokens: last.inputTokens,
     limitTokens: null,
     limitState: "unavailable",
-    limitDetail: "model context window unavailable",
+    // Named, not spelled out: this clause is shown to the reader and has to
+    // follow the panel's language (see ContextView.limitDetailKey).
+    limitDetailKey: "codexNoWindow",
   };
 }
 

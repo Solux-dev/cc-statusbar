@@ -3287,12 +3287,14 @@ test("with no cache activity at all, the ⓘ says exactly that", () => {
   const ru = buildPanelHtml(bare, W, QUOTA_OFF, 1000, "ru");
   assert.match(ru, /кэш ещё не читался и не записывался/);
 
-  // Codex, same case: no cached input yet.
+  // Codex, the same case but NOT the same sentence: it reports cached input
+  // only, so "nothing has been written to cache" is a fact it cannot give us.
   const codex = buildCodexPanelHtml(
     { state: "ok", fiveH: null, sevenD: null }, 1000, "en",
     { source: "stdio", usage: { totalTokens: 105_000, lastTokens: 0, inputTokens: 100_000, cachedInputTokens: 0, outputTokens: 5_000, reasoningOutputTokens: 0 } }
   );
-  assert.match(codex, /Nothing has been read from or written to cache/);
+  assert.match(codex, /Nothing has been read from cache in this session yet/);
+  assert.ok(!/read from or written to cache/.test(codex));
 });
 
 test("a saving the display rounds to 1× is stated without a contradictory multiplier", () => {
@@ -3510,4 +3512,275 @@ test("the reload advice describes what the waiting agent pays, not a fresh agent
   );
   assert.match(en, /often more than starting a fresh agent with a smaller prompt/);
   assert.ok(!/a fresh agent costs less than the one that waited/.test(en));
+});
+
+// ---------------------------------------------------------------------------
+// Round 8 — the seventh review. Both of these are the same defect in different
+// clothes: a sentence that is true of one row applied to every row.
+// ---------------------------------------------------------------------------
+
+test("the idle legend blames a cold cache only where a cost was measured", () => {
+  // `0%` can be a one-turn agent that never paused, and `—` means "we cannot
+  // tell". Neither observation supports "the cache went cold": that sentence
+  // belongs to the rows that carry a figure above zero.
+  const en = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(en, /A figure above zero is not the agent/);
+  assert.ok(!/not the agent&#39;s doing either way/.test(en), "…the form that covered 0% and — as well");
+  assert.ok(!/It is not the agent/.test(en));
+  const ru = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "ru",
+    undefined, undefined, undefined, [PATIENT_AGENT], 1_000_000, undefined, true
+  );
+  assert.match(ru, /Цифра больше нуля — не вина агента/);
+  assert.ok(!/И в том, и в другом случае/.test(ru));
+});
+
+test("a premium too small to change either figure is not announced as one", () => {
+  // 5,005 read at 0.1 saves 4,504.5; 18,019 written on the 5-minute tier costs
+  // 4,504.75. The with-cache figure really is larger — by a quarter of a token,
+  // so both print as the same 23k and the line above says "about the same". A
+  // footnote naming one of them the larger contradicts what the reader sees.
+  const totals = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 5005, cacheWrite: 18019,
+    cacheWrite1h: 0, cacheWrite5m: 18019, cacheWriteUnknown: 0,
+  };
+  // The exact premium is +0.25, so the displayed figures are the same number
+  // while the arithmetic behind the hint still points one way.
+  assert.equal(effectiveTokens(totals, W), 18019 + 5005);
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /about the same so far/);
+  // …but not "the cache moves nothing" either: the premium is real, it is just
+  // smaller than anything this page prints.
+  assert.match(en, /by too little to change either figure/);
+  assert.ok(!/the with-cache figure is the larger of the two/.test(en));
+  assert.ok(!/it is not moving this figure either way/.test(en));
+  const ru = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /пока примерно столько же/);
+  assert.match(ru, /слишком мала, чтобы изменить хоть одну/);
+  assert.ok(!/число с кэшем оказывается больше/.test(ru));
+  assert.ok(!/не меняет ни в одну сторону/.test(ru));
+  // …and a premium the display CAN show still names its cause.
+  const visible = buildPanelHtml(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en");
+  assert.match(visible, /the with-cache figure is the larger of the two/);
+});
+
+test("a visible difference keeps its cause even when the RATIO rounds to 1x", () => {
+  // Round 9 caught the first fix suppressing a real cause: "about the same" is
+  // a rounded RATIO (1.04× here), not two equal figures. 1k of work plus a
+  // 5-minute write of 200 shows 1.3k against 1.2k — different numbers on the
+  // screen, so the premium that separates them must still be named.
+  const totals = {
+    input: 500, output: 500, work: 1000,
+    cacheRead: 0, cacheWrite: 200,
+    cacheWrite1h: 0, cacheWrite5m: 200, cacheWriteUnknown: 0,
+  };
+  assert.equal(fmtTokens(effectiveTokens(totals, W)), "1.3k");
+  assert.equal(fmtTokens(1200), "1.2k");
+  assert.equal(costDirection(effectiveTokens(totals, W), 1200).dir, "same", "the ratio rounds to 1×");
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /the with-cache figure is the larger of the two/);
+  assert.ok(!/it is not moving this figure either way/.test(en));
+  const ru = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /число с кэшем оказывается больше/);
+  assert.ok(!/не меняет ни в одну сторону/.test(ru));
+});
+
+test("a difference the FIGURES hide is still named when the multiplier shows it", () => {
+  // Round 10 caught the second fix over-reaching in the other direction: both
+  // figures print "1.2M" here, but the line beside them says "~1.1× less, so
+  // far". 1.249M against 1.151M — a 98k premium the page DOES state, so a
+  // footnote calling the difference invisible would contradict it.
+  const totals = {
+    input: 400_000, output: 359_000, work: 759_000,
+    cacheRead: 0, cacheWrite: 392_000,
+    cacheWrite1h: 0, cacheWrite5m: 392_000, cacheWriteUnknown: 0,
+  };
+  assert.equal(effectiveTokens(totals, W), 1_249_000);
+  assert.equal(fmtTokens(1_249_000), fmtTokens(1_151_000), "the two figures print the same text");
+  assert.equal(costDirection(1_249_000, 1_151_000).mult, "1.1", "…and the multiplier does not");
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en");
+  assert.match(en, /the with-cache figure is the larger of the two/);
+  assert.ok(!/by too little to change either figure/.test(en));
+  const ru = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /число с кэшем оказывается больше/);
+  assert.ok(!/слишком мала, чтобы изменить хоть одну/.test(ru));
+});
+
+test("when BOTH sides add, neither single-cause sentence is told", () => {
+  // Round 11. `cacheReadWeight` above 1 makes reads add cost instead of saving
+  // it. "The write premium is bigger than what the reads save" is then false
+  // however the two compare — the reads save nothing at all.
+  const totals = {
+    input: 500, output: 500, work: 1000,
+    cacheRead: 100_000, cacheWrite: 100_000,
+    cacheWrite1h: 100_000, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const readsCost = { cacheRead: 2, cacheWrite: 1.25 };
+  assert.equal(effectiveTokens(totals, readsCost), 401_000, "both contributions are +100k");
+  const en = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "en");
+  assert.match(en, /Both sides of the cache add to this figure here/);
+  assert.ok(!/While the premium those writes pay is bigger than what the reads save/.test(en));
+  assert.ok(!/Cached input is priced above fresh input here/.test(en));
+  const ru = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /обе стороны кэша только увеличивают это число/);
+  assert.ok(!/эта надбавка за записи больше/.test(ru));
+  assert.ok(!/Ввод из кэша здесь оценён дороже свежего/.test(ru));
+});
+
+test("an invisible difference stays invisible even when both sides add", () => {
+  // Round 12. Order matters: naming a cause the reader cannot find on the page
+  // is the same defect whether the cause is one side or both. Premium 0.35, and
+  // both figures print 1k.
+  const totals = {
+    input: 500, output: 500, work: 1000,
+    cacheRead: 1, cacheWrite: 1,
+    cacheWrite1h: 0, cacheWrite5m: 1, cacheWriteUnknown: 0,
+  };
+  const readsCost = { cacheRead: 1.1, cacheWrite: 1.25 };
+  assert.equal(effectiveTokens(totals, readsCost), 1002);
+  const en = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "en");
+  assert.match(en, /by too little to change either figure/);
+  assert.ok(!/Both sides of the cache add to this figure here/.test(en));
+  const ru = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /слишком мала, чтобы изменить хоть одну/);
+  assert.ok(!/обе стороны кэша только увеличивают это число/.test(ru));
+});
+
+test("no hint promises what the DEFAULT weights would do to this session", () => {
+  // Round 12. Both promises were false in states that reach their own hint: a
+  // write-only session at cacheWriteWeight 1 is level here and dearer at the
+  // defaults, and at the defaults cacheRead=5 with an unknown-tier write of 18
+  // cancels exactly — so "a difference appears as soon as the cache is used"
+  // is disproved by the default weights themselves.
+  const writeOnly = {
+    input: 100, output: 0, work: 100,
+    cacheRead: 0, cacheWrite: 100,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 100,
+  };
+  const level = { cacheRead: 0.1, cacheWrite: 1 };
+  const en = buildPanelHtml(writeOnly, level, QUOTA_OFF, 1000, "en");
+  assert.match(en, /it is not moving this figure either way/);
+  assert.ok(!/make reuse cheaper/.test(en), "…which it would not: at 1.25 this session is dearer");
+  const ru = buildPanelHtml(writeOnly, level, QUOTA_OFF, 1000, "ru");
+  assert.ok(!/переиспользование дешевле/.test(ru));
+  // …and the no-cache hint promises no difference it cannot guarantee: at the
+  // default weights, 5 read against an unknown-tier write of 18 cancels out.
+  const cancels = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 5, cacheWrite: 18,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 18,
+  };
+  assert.equal(effectiveTokens(cancels, W), 5 + 18, "the default weights cancel exactly here");
+  const untouched = {
+    input: 600, output: 400, work: 1000,
+    cacheRead: 0, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  const noCacheEn = buildPanelHtml(untouched, W, QUOTA_OFF, 1000, "en");
+  assert.ok(!/a difference appears as soon as the cache is used/.test(noCacheEn));
+  assert.match(noCacheEn, /the weights in your settings decide whether they part company/);
+  const noCacheRu = buildPanelHtml(untouched, W, QUOTA_OFF, 1000, "ru");
+  assert.ok(!/разница появится, как только/.test(noCacheRu));
+});
+
+test("Codex never claims nothing was WRITTEN to cache — that counter is its own", () => {
+  // Round 13/14. Cached input of 0 proves no cached input was READ. Codex keeps
+  // a separate cache-write counter, so Claude's "nothing has been read from or
+  // written to cache" states a fact this payload does not carry.
+  const now = 1000;
+  const details = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 0,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+    },
+  };
+  const quota = { state: "ok" as const, fiveH: null, sevenD: { pct: 10, resetAt: now + 86400 } };
+  const en = buildCodexPanelHtml(quota, now, "en", details);
+  assert.match(en, /Nothing has been read from cache in this session yet/);
+  assert.match(en, /Codex counts cache writes separately/);
+  assert.ok(!/read from or written to cache/.test(en), "…Claude's wording, which asserts a write count");
+  assert.ok(!/reports no cache writes at all/.test(en), "…and the claim that Codex has no such counter");
+  const ru = buildCodexPanelHtml(quota, now, "ru", details);
+  assert.match(ru, /из кэша ещё ничего не читалось/);
+  assert.ok(!/не читался и не записывался/.test(ru));
+});
+
+test("the Russian UI has no English left in it where a fact is missing", () => {
+  // Round 14. Both of these are normal states, not transport diagnostics: a
+  // Codex model with no stated context window, and an agent whose type the
+  // transcript never named. Both used to print English inside a Russian panel.
+  const now = 1000;
+  const noWindow = buildCodexPanelHtml(
+    { state: "ok", fiveH: null, sevenD: null }, now, "ru",
+    { source: "stdio", context: { usedTokens: 120_000, limitTokens: null, limitState: "unavailable", limitDetailKey: "codexNoWindow" } }
+  );
+  assert.match(noWindow, /окно контекста модели недоступно/);
+  assert.ok(!/model context window unavailable/.test(noWindow));
+
+  const nameless = [{ agentType: null, description: null, modelId: "claude-opus-5", modelLabel: "Opus 5", effort: "high", effective: 900_000 }];
+  const ru = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, now, "ru",
+    undefined, undefined, undefined, nameless, 1_000_000, undefined, true
+  );
+  assert.match(ru, /агент · Opus 5/);
+  assert.ok(!/>agent · Opus 5/.test(ru));
+});
+
+test("a cache-write count Codex states is shown, not silently dropped", () => {
+  // Round 14. The field exists in Codex's protocol (`cache_write_input_tokens`)
+  // and is 0 in all 109,746 turns measured on this machine — but a stated
+  // non-zero must not vanish from a panel about token cost. It is not folded
+  // into the token-equivalent either: the protocol never says whether those
+  // tokens already sit inside `input_tokens`, and guessing would double-count.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const stated = {
+    source: "stdio" as const,
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 40_000,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+      cacheWriteInputTokens: 12_000,
+    },
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", stated);
+  assert.match(en, /cache: read 40k \/ write 12k/);
+  assert.match(en, /Codex also reports 12k tok written to cache/);
+  const ru = buildCodexPanelHtml(quota, now, "ru", stated);
+  assert.match(ru, /кэш: чтение 40k \/ запись 12k/);
+  assert.match(ru, /сообщает ещё 12k ток\., записанных в кэш/);
+
+  // A payload that states nothing still reads "n/a" — and a stated zero prints
+  // as a zero, because "not stated" and "stated as none" are different answers.
+  const silent = { ...stated, usage: { ...stated.usage, cacheWriteInputTokens: null } };
+  assert.match(buildCodexPanelHtml(quota, now, "en", silent), /write n\/a/);
+  assert.ok(!/also reports/.test(buildCodexPanelHtml(quota, now, "en", silent)));
+  const zero = { ...stated, usage: { ...stated.usage, cacheWriteInputTokens: 0 } };
+  assert.match(buildCodexPanelHtml(quota, now, "en", zero), /cache: read 40k \/ write 0/);
+  assert.ok(!/also reports/.test(buildCodexPanelHtml(quota, now, "en", zero)));
+});
+
+test("an arithmetic zero is a zero, not a premium of 0.0000000000146 tokens", () => {
+  // Round 11. −10k from reads at 0.9 and +10k from writes at 1.1 cancel exactly,
+  // but in floating point they land at ~1.5e-11. Without a tolerance the page
+  // reports a cache that "cost slightly more" when it cost exactly the same.
+  const totals = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 100_000, cacheWrite: 100_000,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 100_000,
+  };
+  const cancelling = { cacheRead: 0.9, cacheWrite: 1.1 };
+  assert.equal(effectiveTokens(totals, cancelling), 200_000);
+  const en = buildPanelHtml(totals, cancelling, QUOTA_OFF, 1000, "en");
+  assert.match(en, /it is not moving this figure either way/);
+  assert.ok(!/cost slightly more than it has saved/.test(en));
+  const ru = buildPanelHtml(totals, cancelling, QUOTA_OFF, 1000, "ru");
+  assert.match(ru, /не меняет ни в одну сторону/);
+  assert.ok(!/стоил чуть больше/.test(ru));
 });

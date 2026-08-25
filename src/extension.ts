@@ -664,6 +664,7 @@ function renderCodex(nowSec: number, lang: Lang, conf: ReturnType<typeof cfg>, c
         cachedInputTokens: codexUsage.total.cachedInputTokens,
         outputTokens: codexUsage.total.outputTokens,
         reasoningOutputTokens: codexUsage.total.reasoningOutputTokens,
+        cacheWriteInputTokens: codexUsage.total.cacheWriteInputTokens ?? null,
       }
     : null;
   const contextState = codexContextView ? undefined : ("waiting" as const);

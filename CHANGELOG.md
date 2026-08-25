@@ -15,8 +15,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   large one is a reason to close an agent instead of leaving it open through a
   long review. `0%` means no waiting cost was measured for that agent: every
   pause it took was judged, and none of them priced to anything — an answer, not
-  a gap. Where the log does not allow the measurement (no cache lifetime stated,
-  a turn that cannot be placed in time) the row shows `—`, because a zero there
+  a gap — an agent that never paused reads `0%` for that reason. Where a **pause**
+  could not be judged and nothing else priced to anything (no cache lifetime
+  stated to measure that pause against, a turn that cannot be placed in time), or
+  where the agent has no measurable spend at all (an empty log, a log of
+  placeholders, a read that failed), the row shows `—`, because a zero there
   would be an invention: on 500 real agent logs that was 1% of them, and when no
   listed agent can be measured the column is left out altogether. Where part of a log could be measured and part
   could not, the figure is marked `≥` — a floor, never presented as the number,
@@ -39,6 +42,20 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   warm — 1 hour idle” in the panel, “1-hour tier” in the hover. Both now read
   the same (RU: «Кэш держится — 1 час простоя»), and a test fails if the word
   comes back on either surface.
+- **Codex's cache-write counter was being thrown away.** Codex does state one
+  (`cache_write_input_tokens`), and the extension parsed every other counter
+  around it while dropping this one — so the Details line said `write n/a` and
+  the panel claimed Codex reports no writes at all. It is now read from both the
+  app-server and rollout shapes, printed as Codex stated it, and named in the ⓘ
+  when it is not zero. It is deliberately **not** added to the token-equivalent:
+  Codex's protocol never says whether those tokens already sit inside
+  `input_tokens`, and adding them on a guess would count them twice. A payload
+  that states nothing still reads `n/a`, which is not the same as a stated `0`.
+  (On this machine every one of 109,746 measured turns states `0`.)
+- **Two English strings survived in the Russian UI.** A Codex model with no
+  context window printed “model context window unavailable”, and an agent whose
+  type the transcript never named printed “agent”, both in Russian panels. Both
+  now follow the interface language.
 
 ### Changed
 
@@ -46,8 +63,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   panel shows `without cache ≈ 110.5M tok — ~7.9× more` as a plain line under
   the headline number (RU: «без кэша было бы …»). It is the one figure that says
   what cache reuse is worth, and anyone who never hovers used to miss it
-  entirely. Only the derived total (“Cache saved”, the difference between the
-  two visible numbers) and the not-a-money-price disclaimer stay in the ⓘ. Same
+  entirely. Only the derived total (“Cache saved”, what the two figures differ
+  by — an exact difference, which rounding can leave larger than two printed
+  figures suggest) and the not-a-money-price disclaimer stay in the ⓘ. Same
   change in the Codex panel — switching provider must not move a number the
   reader has learned to look for.
 - **The comparison now states the direction it actually measures.** Early in a
@@ -57,12 +75,17 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   used to claim a saving regardless — a wrong-signed statement that had been
   hiding in the hover since the feature shipped, and that this release would
   have put in plain sight. It now reads *“~2× less, so far”* while that is
-  true, *“about the same so far”* when the two round to the same number, and it
+  true, *“about the same so far”* when the **ratio** rounds to 1×, and it
   drops the multiplier entirely when one side is zero and no ratio exists. The
-  ⓘ follows the exact numbers rather than the rounded wording, and names the
-  cause the arithmetic actually supports — whichever of cache reads or cache
-  writes contributed more to the difference, or none at all when the cache is
-  not moving the figure. Codex can only ever be the read weight: it reports no
+  ⓘ names the cause the arithmetic actually supports — whichever of cache reads
+  or cache writes contributed more to the difference, or *both* where a
+  `cacheReadWeight` above 1 makes reads add cost instead of saving it; none at
+  all when the cache is genuinely not moving the figure; and, when a real
+  difference is smaller
+  than anything this page prints (both figures round to the same text *and* the
+  ratio rounds to 1×), it says exactly that instead. Naming one of two identical
+  numbers the larger contradicts what is on the screen, and calling a hidden 98k
+  premium “nothing” contradicts the arithmetic. Codex can only ever be the read weight: it reports no
   cache writes. The hover names no cause at all; it has no room for the full
   explanation, and naming the wrong one is worse than naming none.
 - **The page no longer hides its own footer behind a long list.** Order is now:

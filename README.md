@@ -48,10 +48,12 @@ does that they do not:
 | **Cache economy** | Reads the prompt-cache tier from the transcript — 1 hour or 5 minutes — and prices each cache write at the tier its own turn states (a turn that states none is priced by a setting, not by a guess), then adds a line for what pausing costs: a cache goes cold and the whole context is loaded again. | None of the six tells one cache lifetime from another. The closest, `ccusage-vscode`, prices cache tokens only to reach a total in dollars. |
 | **Delegated work as spend** | What each subagent spent, grouped by model and reasoning effort, most expensive first, with the nesting depth that says who chose to spend it. | None of the six attributes spend to the agent that spent it. `claude-state-bar` monitors running agents, which answers *who is working now* — not *what that work cost*. |
 | **Quota from four independent sources** | The account usage payload, a passive statusLine bridge, a header poll, and Claude Code's own on-disk copy. The freshest valid reading wins, so one channel breaking stays invisible, and a stale reading is always shown with its age. | `claude-code-usage-tracker` reads one channel — its own README says "all data comes from the Anthropic API… no local JSONL parsing or file watching is involved" — and `claudemeter` likewise one; `claude-state-bar` also one, and only after you set it up by hand. There is no second source to fall back on. |
-| **Both providers, zero setup** | Claude Code and Codex in the same item, through the logins both tools already have on the machine. | `vscode-codex-usage` covers Codex only; four of the others cover Claude Code only. `claude-state-bar` covers both — after you copy a `sessionKey` and an Org ID out of your browser's DevTools. |
+| **Both providers, zero setup** | Claude Code and Codex in the same item, through the logins both tools already have on the machine. | `vscode-codex-usage` covers Codex only; four of the others cover Claude Code only. `claude-state-bar` covers both too, but its Claude plan usage needs an Org ID and a `sessionKey` copied out of your browser's DevTools. |
 
-The interface is also fully **Russian** as well as English, following the
-editor's display language.
+The status bar, both hovers, both panels and every command are also fully
+**Russian** as well as English, following the editor's display language. (Inside
+VS Code's own settings editor, the provider, language and Codex-path settings
+are translated; the remaining setting descriptions are English.)
 
 ## What it shows
 
@@ -156,8 +158,9 @@ Hover for the full breakdown (tooltip):
   from the Anthropic Models API
   (`max_input_tokens`, cached 24h); hidden entirely if the limit can't be
   fetched (never guessed).
-- **cache** — the prompt-cache tier this session is on, auto-detected from the
-  transcript, e.g. `🗄 Cache: 1-hour tier — survives ~1h idle`.
+- **cache** — how long this session's prompt cache stays warm while you are
+  idle, auto-detected from the transcript, e.g. `🗄 Cache stays warm — 1 hour
+  idle`.
 - **subagents** — one line naming where delegated tokens went:
   `subagents: 8 · ≈2.3M tok — Opus 5/xhigh ×4 ≈1.5M · Sonnet 5/xhigh ×4 ≈861.8k`.
 
@@ -202,16 +205,20 @@ pause, and the tokens behind that share. The percentage says how bad, the tokens
 say whether it is worth acting on: 31% of a small agent is a rounding error, 31%
 of a large one is a reason to close the agent instead of leaving it open through
 a long review. `0%` is a real answer — no waiting cost was measured for that
-agent: every pause it took was judged, and none of them priced to anything. When
-the log does not allow that measurement (its cache lifetime is never stated, or a
-turn cannot be placed in time) the row shows `—`, never a zero: "we cannot tell"
-and "it never waited" are different answers. If *none* of the listed agents can
+agent: every pause it took was judged, and none of them priced to anything (an
+agent that never paused at all, a single turn, is a truthful `0%` too). The row
+shows `—` when a **pause** could not be judged and nothing else priced to
+anything — the stream states no cache lifetime to measure that pause against, or
+a turn cannot be placed in time — and also when the agent has no measurable spend
+at all: an empty log, a log of placeholders, a read that failed. A share of
+nothing is not a zero. A dash is never a zero either: "we cannot tell" and "it
+never waited" are different answers. If *none* of the listed agents can
 be measured, the column is left out altogether rather than filling the list with
 dashes. Where part of a log could be measured and part could not, the figure is
 marked `≥` — a floor, truncated rather than rounded, so it never claims more than
 was measured. On 500 real agent logs measured here, 99% carried a
-number and 1% showed the dash. It is not the agent's doing either way — the
-cache went cold while it was left open.
+number and 1% showed the dash. A figure above zero is not the agent's doing —
+its cache went cold while it was left open.
 
 Agents spawned by *another* agent rather than by the Lead are marked `depth N`
 (real and common — nesting reaches depth 5 in practice), so the breakdown says
@@ -233,7 +240,9 @@ It appears only above a threshold (at least 1M tokens **and** 3% of the
 session), it is never coloured, and the status bar gains nothing — this is
 information, not a quota with consequences. The detection looks at a **pair**,
 never a spike on its own: a gap longer than *that stream's own* TTL, immediately
-followed by a write. A stream whose tier cannot be read is left out entirely.
+followed by a write. A gap in a stream that has not stated a cache lifetime yet
+has nothing to be measured against, so that gap is left out of this line — never
+assumed to be a reload, never assumed not to be one.
 
 ## Provider: Auto / Claude Code / Codex
 
@@ -421,9 +430,11 @@ _По умолчанию язык берётся из языка редакто�
 - **Context and cached input** — read from Codex token counters in local Codex
   history (`~/.codex/sessions/...jsonl`, `token_count`) and from app-server
   token-usage notifications when available.
-- **Not guessed** — Codex does not currently expose cache tier, cache write, or
-  a money price. The extension shows those as unavailable and labels the top
-  number as **token-equivalent**, not billing.
+- **Not guessed** — Codex exposes no cache tier and no money price, and its
+  cache-write counter (`cache_write_input_tokens`) carries no stated
+  relationship to its input count, so it is shown as Codex reports it rather
+  than folded into the token-equivalent. The extension shows what is missing as
+  unavailable and labels the top number as **token-equivalent**, not billing.
 
 ## Privacy / security
 
@@ -542,8 +553,10 @@ The plugin has two parts with different reliability:
 - **Codex support** depends on the local Codex app-server and local Codex session
   history. If app-server is unavailable, the Codex tariff can temporarily show as
   unavailable; if token counters are not present yet, context/cache appear after
-  the next Codex response. Metrics Codex does not expose, such as cache tier and
-  cache write, are shown as unavailable rather than guessed.
+  the next Codex response. What Codex does not expose — the cache tier — is
+  shown as unavailable rather than guessed, and its cache-write counter is
+  displayed as stated rather than folded into a figure it may already be part
+  of.
 
 **What the user does:** nothing. When the channel changes, a fix is released and
 — if installed from the Marketplace — **arrives as an automatic update**.

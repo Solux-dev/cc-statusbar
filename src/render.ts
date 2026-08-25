@@ -68,8 +68,14 @@ export interface ContextView {
   // "(limit n/a)"); "unavailable" = a definitive failure → show used + "(n/a)".
   limitState?: "ok" | "pending" | "unavailable";
   // why the limit is unavailable (e.g. "http 403", a network error) — shown next
-  // to "(limit n/a)" for diagnosability.
+  // to "(limit n/a)" for diagnosability. A raw transport detail stays in English
+  // on purpose: it is a machine string a user reports verbatim.
   limitDetail?: string;
+  // …but a NORMAL state is not a transport detail. Codex simply does not carry a
+  // context window for some models, and that sentence is UI text: it is named by
+  // key here and localised at render time, or a Russian panel would print an
+  // English clause. */
+  limitDetailKey?: "codexNoWindow";
 }
 
 /** Cache insight: which TTL tier the main session is on (auto-detected) and the
@@ -160,13 +166,30 @@ export function agentIdle(
   return { known: true, cost, pctText: pct === 0 ? "<1" : String(pct), atLeast: unjudged };
 }
 
+/** Below this, a difference is not a difference: token counters are integers,
+ *  and the weights that turn them into a token-equivalent are decimals whose
+ *  cancellation lands near, not on, zero. */
+const ZERO_TOLERANCE = 1e-6;
+
 /** Why the with-cache figure is NOT the smaller one. Each side is priced
  *  against reading the same input fresh, so its contribution is what it adds
  *  over that: reads add `cacheRead × (weight − 1)`, writes add the tiered price
- *  minus the tokens themselves. The bigger positive contribution is the cause;
- *  zero contribution on both sides means the cache is simply not moving this
- *  number, which is a different sentence from either cause. Pure. */
-export function costCauseHint(totals: Totals, weights: Weights, m: Messages): string {
+ *  minus the tokens themselves. The bigger positive contribution is the cause —
+ *  unless BOTH are positive, which is a state of its own rather than a contest
+ *  between them; zero contribution on both sides means the cache is simply not
+ *  moving this number, which is a different sentence again. Pure. */
+export function costCauseHint(
+  totals: Totals,
+  weights: Weights,
+  m: Messages,
+  /** True when the difference is invisible EVERYWHERE the page states it: both
+   *  figures print as the same text AND the multiplier rounds to 1×. Naming one
+   *  figure the larger then contradicts a page that shows no difference — and
+   *  the reader believes their eyes, not the footnote. Both halves are needed:
+   *  two figures printing "1.2M" can still carry a visible "~1.1× less", and
+   *  a ratio rounding to 1× can still sit above a visible 1.3k vs 1.2k. */
+  invisible = false
+): string {
   if (totals.cacheRead === 0 && totals.cacheWrite === 0) return m.panelCostNoCacheHint;
   const readDelta = totals.cacheRead * (weights.cacheRead - 1);
   const writeDelta =
@@ -180,7 +203,25 @@ export function costCauseHint(totals: Totals, weights: Weights, m: Messages): st
   // looking at. (A net below zero can only arrive here through display
   // rounding — a saving too small to change either figure — and "it does not
   // move this figure" is exactly the truth in that case.)
-  if (readDelta + writeDelta <= 0) return m.panelCostEvenHint;
+  //
+  // ZERO_TOLERANCE, not 0: the weights are decimals, so an arithmetic zero
+  // (−10k from reads at 0.9, +10k from writes at 1.1) evaluates to 1.5e-11 in
+  // floating point. A millionth of a token is not a premium — no counter can
+  // express one — and without this the page would report a cache that "cost
+  // slightly more" when it cost exactly the same.
+  if (readDelta + writeDelta <= ZERO_TOLERANCE) return m.panelCostEvenHint;
+  // A net ABOVE zero that the page cannot show anywhere comes next, ahead of
+  // every cause: "it is not moving this figure" would deny arithmetic that is
+  // real (rounding can hide tens of thousands of tokens at 1M scale), while
+  // naming ANY cause explains a difference the reader cannot find on the page.
+  // So it says exactly that — there is one, and it is smaller than what is
+  // printed. Ordering matters: a cause named over an invisible difference is
+  // the same defect whether the cause is one side or both.
+  if (invisible) return m.panelCostTooSmallHint;
+  // Both sides adding is its OWN state, not a contest between them: "the write
+  // premium is bigger than what the reads save" is false when the reads save
+  // nothing, and it stays false whichever side happens to be larger.
+  if (readDelta > 0 && writeDelta > 0) return m.panelCostBothHint;
   return writeDelta >= readDelta ? m.panelCostWarmupHint : m.panelCostWeightHint;
 }
 
@@ -404,6 +445,9 @@ export interface CodexQuotaDetails {
     cachedInputTokens: number;
     outputTokens: number;
     reasoningOutputTokens: number;
+    /** Codex's own cache-write counter, `null` when the payload did not state
+     *  one. Reported as 0 in every turn measured on this machine. */
+    cacheWriteInputTokens?: number | null;
   } | null;
   diagnostics?: string[];
 }
@@ -430,7 +474,12 @@ function contextLine(ctx: ContextView | undefined, m: Messages): string | null {
   if (!ctx || ctx.usedTokens == null) return null;
   const pct = contextPct(ctx);
   if (pct != null) return m.contextLine(fmtTokens(ctx.usedTokens), fmtTokens(ctx.limitTokens!), pct);
-  if (ctx.limitState === "unavailable") return m.contextNoLimit(fmtTokens(ctx.usedTokens), ctx.limitDetail);
+  if (ctx.limitState === "unavailable") {
+    // A named reason is UI text and follows the panel's language; a raw
+    // transport detail is reported verbatim and stays as it arrived.
+    const detail = ctx.limitDetailKey === "codexNoWindow" ? m.codexContextNoWindow : ctx.limitDetail;
+    return m.contextNoLimit(fmtTokens(ctx.usedTokens), detail);
+  }
   return null; // pending → show nothing yet
 }
 
@@ -478,7 +527,20 @@ function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
 function codexDetailsLine(details: CodexQuotaDetails, m: Messages): string {
   if (!details.usage) return m.codexDetailsWaitingLine;
   const economy = codexEconomy(details);
-  return m.codexDetailsLine(fmtTokens(economy?.work ?? 0), fmtTokens(details.usage.cachedInputTokens));
+  const write = codexCacheWrite(details);
+  return m.codexDetailsLine(
+    fmtTokens(economy?.work ?? 0),
+    fmtTokens(details.usage.cachedInputTokens),
+    write == null ? null : fmtTokens(write)
+  );
+}
+
+/** Codex's stated cache-write count, or null when it stated none. Never
+ *  rewritten into a zero: "the payload said 0" and "the payload said nothing"
+ *  are different answers, and the panel prints different text for each. */
+function codexCacheWrite(details: CodexQuotaDetails): number | null {
+  const n = details.usage?.cacheWriteInputTokens;
+  return n == null ? null : Math.max(0, n);
 }
 
 function bar(pct: number, width = 8): string {
@@ -1028,7 +1090,7 @@ export function buildPanelHtml(
     const listRows = shown
       .map((a, i) => {
         const depth = a.spawnDepth && a.spawnDepth > 1 ? m.subagentDepth(a.spawnDepth) : null;
-        const who = [a.agentType || "agent", a.modelLabel || "?", a.effort || null, depth]
+        const who = [a.agentType || m.agentFallbackName, a.modelLabel || "?", a.effort || null, depth]
           .filter(Boolean)
           .join(" · ");
         const what = a.description ? ` — ${a.description}` : "";
@@ -1127,8 +1189,20 @@ export function buildPanelHtml(
         // question as "a write is what moved this number". Both sides are priced
         // against a fresh token, so each one's CONTRIBUTION is what it adds over
         // reading that input fresh — and the bigger positive contribution is the
-        // cause. With no contribution at all, no cause is named.
-        `${costCauseHint(totals, weights, m)} ${m.panelTokenCostNote}`;
+        // cause. With no contribution at all — or with one too small to change
+        // either figure on screen — no cause is named.
+        // "Too small to show" needs BOTH of the page's own statements to be
+        // blind to it: the two printed figures and the multiplier. `costDir`
+        // alone rounds the RATIO (1.3k vs 1.2k is "about the same" at 1.04×),
+        // and formatted equality alone rounds the FIGURES (two "1.2M" can sit
+        // above a visible "~1.1× less"). Either one on its own suppresses a
+        // cause the reader can see stated.
+        `${costCauseHint(
+          totals,
+          weights,
+          m,
+          fmtTokens(eff) === fmtTokens(noCache) && costDir === "same"
+        )} ${m.panelTokenCostNote}`;
   const costSection =
     `<div class="sep"></div>` +
     `<div class="row">${hintSpan(m.panelCostLabel, costHint)}` +
@@ -1222,20 +1296,31 @@ export function buildCodexPanelHtml(
   const costRows: string[] = [];
   if (economy) {
     // Same rule as the Claude panel, with one difference: Codex does not report
-    // cache writes at all (its Details line says so), so the only thing that can
-    // invert this comparison is the cache-read weight — never a warm-up write.
+    // cache writes inside the token-equivalent (its own protocol never states
+    // how its write counter relates to `input_tokens`), so the only thing that
+    // can invert this comparison is the cache-read weight.
+    // A write count Codex actually states is never dropped in silence: the
+    // figure cannot absorb it (see the hint — the protocol does not say whether
+    // those tokens are already inside `input_tokens`), so the ⓘ names it.
+    const statedWrite = codexCacheWrite(details);
+    const writeNote =
+      statedWrite && statedWrite > 0 ? ` ${m.codexPanelWriteNotCountedHint(fmtTokens(statedWrite))}` : "";
     const costHint =
       economy.noCache > economy.effective
         ? `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok}` +
-          `${economy.mult && economy.dir === "more" ? ` ${m.codexLowerMult(economy.mult)}` : ""}. ` +
+          `${economy.mult && economy.dir === "more" ? ` ${m.codexLowerMult(economy.mult)}` : ""}.${writeNote} ` +
           m.codexPanelTokenCostNote
         : `${
+            // Codex's own sentence, not Claude's: all we know is that no cached
+            // input was reported. Claude's version also states that nothing was
+            // WRITTEN to cache — a separate counter here, with no stated
+            // relationship to the input count.
             Math.max(0, details.usage?.cachedInputTokens ?? 0) <= 0
-              ? m.panelCostNoCacheHint
+              ? m.codexPanelNoCacheReadHint
               : economy.noCache === economy.effective
               ? m.panelCostEvenHint
               : m.panelCostWeightHint
-          } ${m.codexPanelTokenCostNote}`;
+          }${writeNote} ${m.codexPanelTokenCostNote}`;
     costRows.push(
       `<div class="row">${hintSpan(m.codexPanelCostLabel, costHint)}` +
         `<b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
