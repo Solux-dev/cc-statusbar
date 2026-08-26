@@ -47,3 +47,5 @@ jobs:
 
       - name: Test
         run: npm test
+
+# Proven working: run 32989475962 (manual) and the self-test PR that added this line.
