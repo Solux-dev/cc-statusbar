@@ -136,7 +136,7 @@ token-equivalent number: `$(pulse) eff 4.7M`.
 Hover for the full breakdown (tooltip):
 
 - **token-equivalent** (the headline) — `with cache ≈ 4.7M · without cache ≈ 32M
-  (~6.8× lower)`: a normalized estimate from real token counters, showing how
+  (~6.8× more)`: a normalized estimate from real token counters, showing how
   cache reuse changed the token load compared with re-reading everything fresh
   (early in a session it can be the larger figure — a cache write is priced
   above a fresh token, and at the default weights later reads on the same cache
@@ -297,9 +297,11 @@ For Claude Code these are read straight from the per-turn
 `cache_creation.ephemeral_{1h,5m}` fields in the local transcript, so they stay
 correct even as Anthropic adjusts caching behaviour. Codex exposes cached input
 tokens, so the extension can show **Input from cache**, and it states a
-cache-write count too (`cache_write_input_tokens`) — shown in `Details` exactly
-as Codex reports it. What Codex does not expose is a cache **tier**, so that
-line is shown as not available instead of guessed.
+cache-write count too (`cache_write_input_tokens`) — `Details` shows the count
+Codex itself reports, not the part of it the token-equivalent could price. (Like
+every figure here it is shown compactly: a stated 4,583 prints as `4.6k`.) What
+Codex does not expose is a cache **tier**, so that line is shown as not
+available instead of guessed.
 
 ## Glossary — what you see / Что вы видите
 
@@ -446,8 +448,8 @@ _По умолчанию язык берётся из языка редакто�
   beside it. OpenAI documents the split as
   `ordinary = input − cached − cache_write`, so the extension prices each of the
   three buckets once: ordinary input at 1×, cached reads at your read weight,
-  writes at your write weight. `Details` shows the figure exactly as Codex
-  reports it.
+  writes at your write weight. `Details` shows the count Codex itself reports,
+  not the part of it that could be priced.
 - **Not guessed** — Codex exposes no cache tier and no money price, so a write
   can only be priced by the unstated-tier setting, and the tier line is shown as
   unavailable rather than invented. The extension labels the top number as

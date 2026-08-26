@@ -1,7 +1,9 @@
 # Design spec — idle rebuild (what waiting costs) + panel re-order
 
-Status: **IMPLEMENTED** in 1.0.24 — everything except the panel re-order, which
-stays proposed and ships separately (see "Decisions taken", point 1).
+Status: **IMPLEMENTED**. The measurement and its lines shipped in 1.0.24; the
+panel re-order shipped in 1.0.25 and is no longer proposed. Wording throughout
+this file has been corrected where it named a cause the measurement cannot see —
+each correction is dated where it stands.
 Written 2026-08-24. Grounded in a measurement over a real 8-day
 sample of Claude Code transcripts, deduplicated by `message.id` (the 1.0.17
 rule). Extends [`cache-tier-spec.md`](cache-tier-spec.md) — read that first.
@@ -95,9 +97,9 @@ Cache
   Ввод из кэша ⓘ          98%
 ```
 
-`Tier` / `Тир` is jargon and goes. The hover tooltip already says it well
-(*"Кэш: часовой тир — живёт ~1ч простоя"*) — the panel simply says the same
-thing without the word.
+`Tier` / `Тир` is jargon and goes. (Written when the hover still said *"Кэш:
+часовой тир"*; 1.0.26 dropped the word there too, so both surfaces now read
+*"Кэш держится — 1 час простоя"*.)
 
 ### Panel — `Delegated work`: one new line under the existing summary
 

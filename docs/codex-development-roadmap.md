@@ -73,7 +73,7 @@ explicitly wired into `extension.ts`.
 > token-equivalent all come from the app-server and local rollouts. What is
 > still true from the plan: `buildCodexSnapshot` / `ProviderSnapshot` in
 > `src/codexProvider.ts` remain the unused abstraction this roadmap proposed —
-> the shipped path reads `CodexQuotaDetails` directly. Test count is 261 as of
+> the shipped path reads `CodexQuotaDetails` directly. Test count is 264 as of
 > 26 August 2026, not the 48 this roadmap was written against — a count moves
 > with every round, so it is dated here rather than left to drift.
 

@@ -167,7 +167,17 @@ export function agentIdle(
   if (unjudged && pct === 0) return { known: true, cost, pctText: null, atLeast: true };
   // A real loss must never print as "0%" — in a cell about what waiting cost,
   // that reads as "it cost nothing". Same rule as the section's own share.
-  return { known: true, cost, pctText: pct === 0 ? "<1" : String(pct), atLeast: unjudged };
+  //
+  // …and the mirror at the top end, which was missing: a real remainder must not
+  // print as "100%" either, because that reads as "this agent did nothing but
+  // reload". 99.6% of a spend that also did real work is ">99%", not all of it.
+  const remainder = a.effective - cost;
+  return {
+    known: true,
+    cost,
+    pctText: pct === 0 ? "<1" : pct === 100 && remainder > ZERO_TOLERANCE ? ">99" : String(pct),
+    atLeast: unjudged,
+  };
 }
 
 /** Below this, a difference is not a difference: token counters are integers,
@@ -565,6 +575,12 @@ function codexEconomy(
    *  only be higher leaves a saving that can only be smaller. "exact" whenever
    *  the interval cannot change what the saving prints. */
   savedBound: BoundDirection;
+  /** The bound on the token-equivalent ITSELF — `writeBound` where an unstated
+   *  count would change what the figure prints, "exact" where it would not. The
+   *  headline and the hover carry its sign, not just the ⓘ: a figure printed
+   *  bare is read as a measurement, and this page marks its bounds everywhere
+   *  else it has one. */
+  effectiveBound: BoundDirection;
 } | null {
   if (!details.usage) return null;
   const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
@@ -601,25 +617,31 @@ function codexEconomy(
   const effectiveNone = effective;
   const effectiveAll =
     writeStated == null ? effective + afterCached * (cacheWriteWeight - 1) : effective;
-  // …but only the COMPARISON may sort them by size: below a write weight of 1
-  // the "all written" end is the smaller one, and a sentence that says "if none
-  // … if all" has to be handed them the other way round.
+  const here = costDirection(effective, noCache);
+  const canMove = writeStated == null && afterCached > 0;
+  const atOtherEnd = canMove ? costDirection(effectiveAll, noCache) : here;
+  const effectiveStable = !canMove || fmtTokens(effectiveAll) === fmtTokens(effectiveNone);
+  // The direction is announced as unknown only where the without-cache figure
+  // falls STRICTLY between the two ends — one end saying the cache saved and the
+  // other saying it cost. A figure sitting exactly ON an end is not that case:
+  // there the page prints two equal numbers and the ⓘ marks the bound, which is
+  // the whole truth about what is visible.
+  //
+  // …and never where the two ends print the SAME text, because then the page
+  // shows one number, and announcing an unknowable ordering between two figures
+  // the reader sees as identical explains a difference that is not on the page.
+  // That is the rule rounds 10 and 12 settled for the cause chain, whose own
+  // invisible-difference branch takes it from here.
   const lo = Math.min(effectiveNone, effectiveAll);
   const hi = Math.max(effectiveNone, effectiveAll);
-  // The direction survives only if the without-cache figure does NOT fall
-  // strictly inside the interval. If it does, one end says the cache saved and
-  // the other says it cost — and publishing either is a coin toss printed as a
-  // fact. The tolerance is the same one an arithmetic zero needs elsewhere.
-  const directionCertain = !(noCache > lo + ZERO_TOLERANCE && noCache < hi - ZERO_TOLERANCE);
-  const here = costDirection(effective, noCache);
+  const directionCertain =
+    !(noCache > lo + ZERO_TOLERANCE && noCache < hi - ZERO_TOLERANCE) || effectiveStable;
   // A derived figure is publishable while the unstated count cannot change what
   // it PRINTS — the same test the panel already applies to two token figures
   // that round to the same text. Where the ends print differently, the saving
   // carries the bound it actually has (the opposite of the token-equivalent's,
   // because `noCache` is exact) and the multiplier is dropped: a ratio has no
   // room for a marker, and an unmarked one is the overstatement itself.
-  const canMove = writeStated == null && afterCached > 0;
-  const atOtherEnd = canMove ? costDirection(effectiveAll, noCache) : here;
   const multStable = !canMove || (atOtherEnd.dir === here.dir && atOtherEnd.mult === here.mult);
   const savedStable =
     !canMove || fmtTokens(Math.max(0, noCache - effectiveAll)) === fmtTokens(saved);
@@ -631,6 +653,7 @@ function codexEconomy(
     effectiveNone,
     effectiveAll,
     savedBound: savedStable ? ("exact" as BoundDirection) : invertBound(writeBound(cacheWriteWeight)),
+    effectiveBound: effectiveStable ? ("exact" as BoundDirection) : writeBound(cacheWriteWeight),
     ...here,
     mult: multStable ? here.mult : null,
     work,
@@ -665,16 +688,21 @@ function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
   // the two figures on either side of each other. The hover has no ⓘ to carry a
   // caveat, so the caveat has to be the line itself.
   if (!economy.directionCertain) {
-    return m.codexCostUnknownCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache));
+    return m.codexCostUnknownCompact(
+      fmtTokens(economy.effective, economy.effectiveBound),
+      fmtTokens(economy.noCache),
+      boundMark(economy.effectiveBound)
+    );
   }
   // …and `economy.mult` is already null where an unstated count could change
   // what it prints, so the hover and the panel drop it on the same tick.
   return m.codexCostCompact(
-    fmtTokens(economy.effective),
+    fmtTokens(economy.effective, economy.effectiveBound),
     fmtTokens(economy.noCache),
     economy.mult,
     economy.dir,
-    codexCanReverse(details)
+    codexCanReverse(details),
+    boundMark(economy.effectiveBound)
   );
 }
 
@@ -1225,8 +1253,15 @@ export function buildPanelHtml(
     const sessionTotal = lead + subTotal;
     const sharePct = sessionTotal > 0 ? Math.round((subTotal / sessionTotal) * 100) : 0;
     // A real but small share must not print as "0%" — in a section about what
-    // delegation COST, that reads as "it cost nothing".
-    const shareText = sharePct === 0 && subTotal > 0 ? "<1" : String(sharePct);
+    // delegation COST, that reads as "it cost nothing". And the mirror: a real
+    // lead spend must not vanish into "100%", which reads as "the main session
+    // spent nothing".
+    const shareText =
+      sharePct === 0 && subTotal > 0
+        ? "<1"
+        : sharePct === 100 && lead > ZERO_TOLERANCE
+        ? ">99"
+        : String(sharePct);
 
     const gRows = groups
       .map((g) => {
@@ -1311,7 +1346,13 @@ export function buildPanelHtml(
     const rebShareText =
       rebAtLeast && rebShare === 0
         ? null
-        : `${rebAtLeast ? "≥" : ""}${rebShare === 0 && reb.cost > 0 ? "<1" : String(rebShare)}%`;
+        : `${rebAtLeast ? "≥" : ""}${
+            rebShare === 0 && reb.cost > 0
+              ? "<1"
+              : rebShare === 100 && subTotal - reb.cost > ZERO_TOLERANCE
+              ? ">99"
+              : String(rebShare)
+          }%`;
     const rebuildRow = reb.show
       ? `<div class="sub">${hintSpan(
           m.panelSubagentsRebuild(`${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`, rebShareText),
@@ -1354,9 +1395,12 @@ export function buildPanelHtml(
   // cache that has saved 3.6k has still saved something.
   const costHint =
     noCache > eff
-      ? `${m.panelSavedLabel}: ≈ ${fmtTokens(saved)} ${m.tok}` +
-        // no multiplier when the line above has just called the two the same
-        `${mult && costDir === "more" ? ` ${m.lowerMult(mult)}` : ""}. ${m.panelTokenCostNote}`
+      ? // No multiplier here. It used to read "Cache saved: ≈ 26.8M tok (~6.1×
+        // lower)", where the ratio follows a figure that is neither of its two
+        // operands — the saving is not 6.1× lower than anything. The visible
+        // line above the ⓘ already states the ratio, against the figures it is
+        // actually between.
+        `${m.panelSavedLabel}: ≈ ${fmtTokens(saved)} ${m.tok}. ${m.panelTokenCostNote}`
       : // Which cause is named matters, and "a write exists" is not the same
         // question as "a write is what moved this number". Both sides are priced
         // against a fresh token, so each one's CONTRIBUTION is what it adds over
@@ -1528,12 +1572,11 @@ export function buildCodexPanelHtml(
           // only be smaller. The multiplier is that same ratio and moves with
           // it, so it is dropped rather than printed unmarked; the ⓘ that
           // follows says which way and why.
-          `${m.codexPanelSavedLabel}: ${boundMark(savedBound)} ${fmtTokens(economy.saved, savedBound)} ${m.tok}` +
-          `${
-            savedBound === "exact" && economy.mult && economy.dir === "more"
-              ? ` ${m.codexLowerMult(economy.mult)}`
-              : ""
-          }.${writeNote} ` +
+          // No multiplier, for the same reason as the Claude twin: the ratio
+          // would follow the saving, which is neither of its operands, and the
+          // visible line above already states it against the right two figures.
+          `${m.codexPanelSavedLabel}: ${boundMark(savedBound)} ${fmtTokens(economy.saved, savedBound)} ` +
+          `${m.tok}.${writeNote}${savedBound === "exact" ? "" : ` ${m.savedBoundNote(savedBound)}`} ` +
           m.codexPanelTokenCostNote
         : `${
             // Codex's own sentence, not Claude's: it states that nothing was
@@ -1553,8 +1596,13 @@ export function buildCodexPanelHtml(
               : m.panelCostWeightHint
           }${writeNote} ${m.codexPanelTokenCostNote}`;
     costRows.push(
+      // The headline carries its own sign. An unstated write count that would
+      // change what this prints makes it a bound, and a bound printed bare as
+      // "≈" is read as a measurement — the ⓘ under it is not where a reader
+      // learns that the visible number is not the number.
       `<div class="row">${hintSpan(m.codexPanelCostLabel, costHint)}` +
-        `<b>≈ ${fmtTokens(economy.effective)} ${esc(m.tok)}</b></div>`
+        `<b>${boundMark(economy.effectiveBound)} ${fmtTokens(economy.effective, economy.effectiveBound)} ` +
+        `${esc(m.tok)}</b></div>`
     );
     // Same visible comparison as the Claude panel — switching provider must not
     // move a number the reader has learned to look for.

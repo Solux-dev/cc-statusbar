@@ -54,6 +54,27 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   promising.** Round 18 gated the four visible cost lines on “can any weight
   still narrow this gap”. The ⓘ under them kept “so far” and “yet” regardless. A
   footnote is a statement too.
+- **“About the same” walked past the guard built to stop it.** Where an unstated
+  Codex write count could change the multiplier, the multiplier is dropped — but
+  every cost line tested “are the two about the same?” *before* it checked
+  whether a magnitude claim was safe, so the one claim the guard exists to kill
+  survived it. Reachable at the shipped defaults, and on the hover, which has no
+  ⓘ to caveat it.
+- **An interval the page cannot print is no longer announced as an unknown.**
+  When both ends of that interval and the without-cache figure all print the
+  same text, saying “which of the two is larger cannot be said” explains a
+  difference the reader cannot find, and the note under it claimed one figure
+  fell between two copies of itself.
+- **A real remainder no longer disappears into `100%`.** `<1%` had no mirror at
+  the top end: a lead that spent 0.4% of the session read as having spent
+  nothing. Both the delegated share and the per-agent reload share print `>99%`
+  there now.
+- **A multiplier sat next to a figure it was not about.** The ⓘ read `Cache
+  saved: ≈ 26.8M tok (~6.1× lower)` — the saving is not 6.1× lower than
+  anything; the ratio belongs to the two figures on the visible line above,
+  which already states it.
+- **The `≤` on a bounded saving had no legend.** `≥` has carried one since
+  1.0.24; its mirror explains itself now too.
 - **The hover's comparison word described the wrong figure.** It read
   `without cache ≈ 1.3M (~3.6× lower)` — the word sits right after the
   without-cache figure, which is the *higher* of the two; the subject was the
@@ -152,8 +173,12 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 - **A Codex cache write was priced as ordinary fresh input.** This is a change
   to the figure, not only to the words around it. OpenAI documents
   `input_tokens_details` as a breakdown of the input count, with
-  `ordinary = input − cached − cache_write`, cached reads at 0.1× and writes at
-  1.25×; Codex maps its field straight through from there, and its own parse
+  `ordinary = input − cached − cache_write`, and — for GPT-5.6 and later —
+  cached reads at 0.1× and writes at 1.25×. (Earlier models are listed with a
+  model-dependent cached-read rate and no cache-write charge at all; what this
+  extension prices with are its own `ccStatusbar.cacheReadWeight` and
+  `cacheWriteWeight`, whose defaults happen to match the GPT-5.6+ figures.)
+  Codex maps its field straight through from there, and its own parse
   test carries `input 100 · cached 40 · write 60 · output 10 · total 110`, where
   the write moves no total. The extension used to subtract only the reads, which
   left every written token priced at 1× — for a payload of 100k input / 40k

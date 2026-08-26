@@ -55,7 +55,11 @@ export interface Messages {
     noCache: string,
     mult: string | null,
     dir: CostDirection,
-    canReverse?: boolean
+    canReverse?: boolean,
+    /** Sign for the with-cache figure: "≈" unless an unstated Codex write count
+     *  would change what it prints, when it is "≥" or "≤". The hover has no ⓘ,
+     *  so a bound it does not print is a bound the reader never sees. */
+    mark?: string
   ) => string;
   codexUsageWaitingCompact: string;
   codexContextShortUnavailable: string;
@@ -92,7 +96,7 @@ export interface Messages {
    *  branches names a direction. */
   codexCompareUnknown: (noCache: string) => string;
   /** …and the hover's twin of the same. */
-  codexCostUnknownCompact: (withCache: string, noCache: string) => string;
+  codexCostUnknownCompact: (withCache: string, noCache: string, mark?: string) => string;
   /** Shown when tokens were actually PRICED as cache writes — never on the raw
    *  count Codex stated, which the clamp may not have been able to apply in
    *  full. `tokens` is therefore what went into the figure, not what the payload
@@ -112,6 +116,10 @@ export interface Messages {
   // is user-settable from 0 upward (`package.json`), so all three are reachable.
   codexPanelWriteUnstatedHint: (weight: string, dir: BoundDirection) => string;
   codexLowerMult: (mult: string) => string;
+  /** Explains the sign on a bounded SAVING. `≥` has `panelAtLeastNote`; `≤` had
+   *  no legend anywhere, and the note beside it speaks about a different figure
+   *  bounded the other way, so the relation between the two has to be said. */
+  savedBoundNote: (dir: BoundDirection) => string;
   codexPanelUsageWaiting: string;
   codexPanelTokenCostNote: string;
   codexPanelQuotaHeader: string;
@@ -346,12 +354,12 @@ const EN: Messages = {
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · plan ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
   // Same subject as its Claude twin and as both panels — see `costCompact`.
-  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true) =>
-    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
-    (dir === "same"
-      ? ` (about the same${canReverse ? " so far" : ""})`
-      : !mult
+  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true, mark = "≈") =>
+    `token-equivalent with cache ${mark} **${withCache}** · without cache ≈ **${noCache}**` +
+    (!mult
       ? ""
+      : dir === "same"
+      ? ` (about the same${canReverse ? " so far" : ""})`
       : dir === "more"
       ? ` (~${mult}× more)`
       : ` (~${mult}× less${canReverse ? ", so far" : ""})`),
@@ -392,14 +400,17 @@ const EN: Messages = {
   codexCompareUnknown: (noCache) =>
     `without cache ≈ ${noCache} tok — which of the two is larger cannot be said while Codex states no ` +
     `cache-write count`,
-  codexCostUnknownCompact: (withCache, noCache) =>
-    `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}** ` +
+  codexCostUnknownCompact: (withCache, noCache, mark = "≈") =>
+    `token-equivalent with cache ${mark} **${withCache}** · without cache ≈ **${noCache}** ` +
     `(which is larger cannot be said — Codex stated no cache-write count)`,
   codexPanelWritePricedHint: (tokens) =>
     `Of the input above, ${tokens} tok were written to cache. OpenAI documents that counter as a part ` +
     `of the input count rather than an extra beside it, so those tokens are counted once — at your ` +
+    // Not "exactly": every figure on this page goes through the same compact
+    // formatter, so a stated 4,583 prints as "4.6k". The claim that matters is
+    // whose number it is — Codex's own, not the clamped part priced here.
     `\`ccStatusbar.cacheWriteWeight\` instead of as ordinary fresh input. The Details line shows the ` +
-    `count exactly as Codex stated it.`,
+    `count Codex itself stated, not the part of it this figure could price.`,
   codexPanelWriteClampedHint: (stated, priced) =>
     `Codex stated ${stated} tok written to cache, but only ${priced} tok of its input count are left ` +
     `once the cached reads are taken out, so ${priced} is all this figure could price. A breakdown ` +
@@ -419,6 +430,12 @@ const EN: Messages = {
       : `the token-equivalent does not move: your \`ccStatusbar.cacheWriteWeight\` (${weight}) prices a ` +
         `write exactly as ordinary input.`),
   codexLowerMult: (mult) => `(~${mult}× lower)`,
+  savedBoundNote: (dir) =>
+    dir === "ceiling"
+      ? "The saving is what is left of the without-cache figure, which is exact — so a token-equivalent " +
+        "that can only be higher leaves a saving that can only be smaller. That is what the ≤ marks."
+      : "The saving is what is left of the without-cache figure, which is exact — so a token-equivalent " +
+        "that can only be lower leaves a saving that can only be bigger. That is what the ≥ marks.",
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
   codexPanelTokenCostNote:
     "Calculated from real local token counters. The cache multiplier is this extension's token-equivalent estimate, not a money price.",
@@ -518,10 +535,10 @@ const EN: Messages = {
   // what the line shows.
   costCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
-    (dir === "same"
-      ? ` (about the same${canReverse ? " so far" : ""})`
-      : !mult
+    (!mult
       ? ""
+      : dir === "same"
+      ? ` (about the same${canReverse ? " so far" : ""})`
       : dir === "more"
       ? ` (~${mult}× more)`
       : ` (~${mult}× less${canReverse ? ", so far" : ""})`),
@@ -569,11 +586,14 @@ const EN: Messages = {
   tok: "tok",
   panelCostLabel: "Token-equivalent with cache",
   panelSavedLabel: "Cache saved",
+  // A null multiplier means "no magnitude claim is safe here", and "about the
+  // same" IS one — so it is tested first. (It also covers the honest case the
+  // reorder gives up: two zeros, where the bare line is no worse.)
   panelCostCompare: (noCache, mult, dir, canReverse = true) =>
-    dir === "same"
-      ? `without cache ≈ ${noCache} tok — about the same${canReverse ? " so far" : ""}`
-      : !mult
+    !mult
       ? `without cache ≈ ${noCache} tok`
+      : dir === "same"
+      ? `without cache ≈ ${noCache} tok — about the same${canReverse ? " so far" : ""}`
       : dir === "more"
       ? `without cache ≈ ${noCache} tok — ~${mult}× more`
       : `without cache ≈ ${noCache} tok — ~${mult}× less${canReverse ? ", so far" : ""}`,
@@ -683,12 +703,12 @@ const RU: Messages = {
   codexQuotaHeader: "**Тариф (реальный, с сервера):**",
   codexAppServerLine: (source, plan, userAgent) =>
     `app-server: ${source}${plan ? ` · план ${plan}` : ""}${userAgent ? ` · ${userAgent}` : ""}`,
-  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true) =>
-    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
-    (dir === "same"
-      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
-      : !mult
+  codexCostCompact: (withCache, noCache, mult, dir, canReverse = true, mark = "≈") =>
+    `токен-эквивалент с кэшем ${mark} **${withCache}** · без кэша ≈ **${noCache}**` +
+    (!mult
       ? ""
+      : dir === "same"
+      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
       : dir === "more"
       ? ` (в ~${mult}× больше)`
       : ` (${canReverse ? "пока " : ""}в ~${mult}× меньше)`),
@@ -727,14 +747,14 @@ const RU: Messages = {
   codexCompareUnknown: (noCache) =>
     `без кэша было бы ≈ ${noCache} ток — какое из двух чисел больше, сказать нельзя: Codex не сообщил ` +
     `счётчик записи в кэш`,
-  codexCostUnknownCompact: (withCache, noCache) =>
-    `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}** ` +
+  codexCostUnknownCompact: (withCache, noCache, mark = "≈") =>
+    `токен-эквивалент с кэшем ${mark} **${withCache}** · без кэша ≈ **${noCache}** ` +
     `(какое больше — сказать нельзя: Codex не сообщил счётчик записи в кэш)`,
   codexPanelWritePricedHint: (tokens) =>
     `Из ввода выше ${tokens} ток. записаны в кэш. В документации OpenAI этот счётчик — часть счётчика ` +
     `ввода, а не добавка к нему, поэтому эти токены посчитаны один раз: по вашему параметру ` +
-    `\`ccStatusbar.cacheWriteWeight\`, а не как обычный ввод. В строке «Детали» число показано ровно ` +
-    `так, как его назвал Codex.`,
+    `\`ccStatusbar.cacheWriteWeight\`, а не как обычный ввод. В строке «Детали» показан счётчик, ` +
+    `который назвал сам Codex, а не та его часть, что попала в это число.`,
   codexPanelWriteClampedHint: (stated, priced) =>
     `Codex сообщил ${stated} ток., записанных в кэш, но после вычета чтений из кэша в его счётчике ` +
     `ввода остаётся только ${priced} ток. — столько это число и смогло оценить. Часть не может быть ` +
@@ -751,6 +771,12 @@ const RU: Messages = {
       : `токен-эквивалент не изменится: ваш параметр \`ccStatusbar.cacheWriteWeight\` (${weight}) ` +
         `оценивает запись ровно как обычный ввод.`),
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
+  savedBoundNote: (dir) =>
+    dir === "ceiling"
+      ? "Экономия — это остаток от числа без кэша, а оно точное. Поэтому если токен-эквивалент может " +
+        "быть только больше, экономия может быть только меньше. Это и значит знак ≤."
+      : "Экономия — это остаток от числа без кэша, а оно точное. Поэтому если токен-эквивалент может " +
+        "быть только меньше, экономия может быть только больше. Это и значит знак ≥.",
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
   codexPanelTokenCostNote:
     "Рассчитано из реальных локальных счётчиков токенов. Коэффициент кэша — токен-эквивалент расширения, не денежная цена.",
@@ -845,10 +871,10 @@ const RU: Messages = {
   title: "**Claude Code — расход сессии**",
   costCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
-    (dir === "same"
-      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
-      : !mult
+    (!mult
       ? ""
+      : dir === "same"
+      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
       : dir === "more"
       ? ` (в ~${mult}× больше)`
       : ` (${canReverse ? "пока " : ""}в ~${mult}× меньше)`),
@@ -897,10 +923,10 @@ const RU: Messages = {
   panelCostLabel: "Токен-эквивалент с кэшем",
   panelSavedLabel: "Сэкономлено кэшем",
   panelCostCompare: (noCache, mult, dir, canReverse = true) =>
-    dir === "same"
-      ? `без кэша было бы ≈ ${noCache} ток — ${canReverse ? "пока " : ""}примерно столько же`
-      : !mult
+    !mult
       ? `без кэша было бы ≈ ${noCache} ток`
+      : dir === "same"
+      ? `без кэша было бы ≈ ${noCache} ток — ${canReverse ? "пока " : ""}примерно столько же`
       : dir === "more"
       ? `без кэша было бы ≈ ${noCache} ток — в ~${mult}× больше`
       : `без кэша было бы ≈ ${noCache} ток — ${canReverse ? "пока " : ""}в ~${mult}× меньше`,

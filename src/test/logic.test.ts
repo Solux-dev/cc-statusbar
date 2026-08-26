@@ -627,12 +627,15 @@ test("buildCodexQuotaView/buildCodexPanelHtml: Codex cache appears when token us
   };
   const quota = { state: "ok" as const, fiveH: { pct: 10, resetAt: now + WINDOW_5H_SECONDS }, sevenD: null };
   const view = buildCodexQuotaView(quota, now, "ru", details);
-  assert.match(view.tooltip, /токен-эквивалент с кэшем ≈ \*\*975\*\* · без кэша ≈ \*\*1\.2k\*\*/);
+  // `≥`, not `≈`: no write count is stated and 750 of ordinary input could
+  // hold one, which would take the figure to 1.2k. The hover has no ⓘ, so it
+  // carries the sign itself.
+  assert.match(view.tooltip, /токен-эквивалент с кэшем ≥ \*\*975\*\* · без кэша ≈ \*\*1\.2k\*\*/);
   assert.match(view.tooltip, /ввод из кэша: 25%/);
   const html = buildCodexPanelHtml(quota, now, "ru", details);
   assert.match(html, />Кэш</);
   assert.match(html, /Токен-эквивалент с кэшем/);
-  assert.match(html, /≈ 975 ток/);
+  assert.match(html, /≥ 975 ток/);
   assert.match(html, /≈ 1\.2k ток/);
   // The saving is "≤", not "≈": this payload states no cache-write count, so
   // the 750 of ordinary input could hold one. At the far end the saving is 38,
@@ -1399,7 +1402,11 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   assert.match(en, /Token-equivalent with cache/);
   assert.match(en, /without cache ≈ 11\.2M tok/);
   assert.match(en, /Cache saved/);
-  assert.match(en, /~4\.6× lower/);
+  // The ratio lives on the VISIBLE line, against the two figures it is between.
+  // Inside the ⓘ it followed the saving — which is neither operand, so "the
+  // saving is ~4.6× lower" than nothing in particular. Round 20.
+  assert.match(en, /without cache ≈ 11\.2M tok — ~4\.6× more/);
+  assert.ok(!/~4\.6× lower/.test(en));
   assert.match(en, /2\.5M/);
   assert.match(en, /11\.2M/);
   assert.match(en, /Subscription quota/);
@@ -1408,7 +1415,8 @@ test("buildPanelHtml: valid doc with effective + quota (en) and localized (ru)",
   assert.match(ru, /Токен-эквивалент с кэшем/);
   assert.match(ru, /без кэша было бы ≈ 11\.2M ток/);
   assert.match(ru, /Сэкономлено кэшем/);
-  assert.match(ru, /в ~4\.6× меньше/);
+  assert.match(ru, /без кэша было бы ≈ 11\.2M ток — в ~4\.6× больше/);
+  assert.ok(!/в ~4\.6× меньше/.test(ru));
   assert.match(ru, /Тариф/);
 });
 
@@ -2796,8 +2804,8 @@ const CODEX_ORDER = [
   // none and 2.8× if it held all of it. A multiplier has no room for a marker,
   // so it is dropped rather than printed at the flattering end. The two absolute
   // figures — the point of the line — are unaffected.
-  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", compare: "without cache ≈ 105k tok", hidden: "Cache saved", value: "≈ 33k tok" },
-  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", compare: "без кэша было бы ≈ 105k ток", hidden: "Сэкономлено кэшем", value: "≈ 33k ток" },
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", compare: "without cache ≈ 105k tok", hidden: "Cache saved", value: "≥ 33k tok" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", compare: "без кэша было бы ≈ 105k ток", hidden: "Сэкономлено кэшем", value: "≥ 33k ток" },
 ];
 
 for (const c of CODEX_ORDER) {
@@ -3065,7 +3073,7 @@ test("buildCodexPanelHtml: a cacheReadWeight above 1 inverts Codex too — and i
     { source: "stdio", usage: ORDER_CODEX_USAGE, weights: { cacheRead: 2, cacheWrite: 1.25 } }
   );
   // fresh 20k + out 5k + 80k×2 = 185k with cache; 100k + 5k = 105k without.
-  assert.match(html, /≈ 185k tok/);
+  assert.match(html, /≥ 185k tok/);
   assert.match(html, /without cache ≈ 105k tok — ~1\.8× less/);
   assert.ok(!/Cache saved/.test(html));
   // This payload states no write count, so nothing here can be blamed on a
@@ -4141,6 +4149,85 @@ test("no direction is published where an unstated Codex write count decides it",
   assert.ok(!/cannot be said/.test(stated));
 });
 
+test("a dropped multiplier takes 'about the same' with it", () => {
+  // Round 20. A null multiplier means "no magnitude claim is safe here", but the
+  // formatters tested `dir === "same"` FIRST, so the one claim the guard exists
+  // to kill walked straight past it. Reachable at shipped defaults: 1M of input,
+  // nothing cached, no write count stated — equal at the "none" end, 1.25M at
+  // the other. The hover has no ⓘ, so the sentence was its whole caveat.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const codex = {
+    source: "stdio" as const,
+    weights: { cacheRead: 0.1, cacheWrite: 1.25 },
+    usage: {
+      totalTokens: 1_000_000, lastTokens: 1_000_000,
+      inputTokens: 1_000_000, cachedInputTokens: 0,
+      outputTokens: 0, reasoningOutputTokens: 0,
+    } as never,
+  };
+  const hover = buildCodexQuotaView(quota, now, "en", codex).tooltip;
+  assert.match(hover, /token-equivalent with cache ≥ \*\*1M\*\* · without cache ≈ \*\*1M\*\*/);
+  assert.ok(!/about the same/.test(hover), "a claim about magnitude, on a figure that is a bound");
+  const panel = buildCodexPanelHtml(quota, now, "en", codex);
+  assert.match(panel, /without cache ≈ 1M tok</);
+  assert.ok(!/about the same/.test(panel));
+  assert.ok(!/пока примерно столько же/.test(buildCodexQuotaView(quota, now, "ru", codex).tooltip));
+});
+
+test("an interval the page cannot print is not announced as an unknowable direction", () => {
+  // Round 20. The direction-unknown branch sat ahead of the invisible-difference
+  // guard, so a session whose two ends and without-cache figure ALL print `1.7M`
+  // got a line saying which is larger cannot be said, over a hint claiming 1.7M
+  // "falls between" 1.7M and 1.7M. Rounds 10 and 12 settled this for the cause
+  // chain; the same rule reaches here.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const flat = {
+    source: "stdio" as const,
+    weights: { cacheRead: 0.1, cacheWrite: 1.25 },
+    usage: {
+      totalTokens: 0, lastTokens: 0,
+      inputTokens: 29_797, cachedInputTokens: 735,
+      outputTokens: 1_644_441, reasoningOutputTokens: 0,
+    } as never,
+  };
+  const en = buildCodexPanelHtml(quota, now, "en", flat);
+  assert.ok(!/cannot be said/.test(en), "nothing to be uncertain about that the page can show");
+  assert.ok(!/falls between those two/.test(en));
+  assert.match(en, /Cache saved/);
+  assert.ok(!/cannot be said/.test(buildCodexQuotaView(quota, now, "en", flat).tooltip));
+});
+
+test("a real remainder never disappears into 100%", () => {
+  // Round 20. `<1` had no mirror at the top end: 99.6% rounded to `100%`, which
+  // reads as "the main session spent nothing" / "this agent did nothing but
+  // reload". Same reasoning as the `<1` guard, same shape.
+  const reb = {
+    tokens: 200_000, tokens1h: 0, tokens5m: 200_000, tokensUnknown: 0,
+    cacheWrite: 200_000, streams: 1, unjudged: 0,
+  };
+  const subs = [{
+    agentType: "explore", description: "d", modelId: "m", modelLabel: "Opus 5",
+    effort: "high", effective: 250_250, rebuild: reb,
+  }];
+  const totals = {
+    input: 251_250, output: 0, work: 251_250,
+    cacheRead: 0, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  // lead 1k against 250.25k delegated → 99.6%, and the agent's own 250k of
+  // reloads is 99.9% of its 250.25k spend. Neither is all of it.
+  const html = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en", undefined, undefined, undefined, subs, 1_000, { subagents: reb }, true);
+  // Scoped to the two sentences, not the whole page: the stylesheet carries a
+  // `height:100%` of its own.
+  assert.ok(!/— 100% of this session/.test(html), "a lead that spent something is not 0% of it");
+  assert.ok(!/after pauses 100%/.test(html), "an agent that did real work did not only reload");
+  // `>` is escaped in the panel's HTML, so the marker reads `&gt;99%`.
+  assert.match(html, /&gt;99% of this session's consumption/);
+  assert.match(html, /after pauses &gt;99%/);
+});
+
 test("the two ends of the unstated-write interval are named by meaning, not by size", () => {
   // Round 19, second channel — a defect the FIRST half of round 19 introduced.
   // The ⓘ reads its arguments as "if none was written" then "if all was", but
@@ -4162,7 +4249,7 @@ test("the two ends of the unstated-write interval are named by meaning, not by s
   // none → 90k + 5k + 10k×2 = 115k · all → 115k − 90k×0.5 = 70k · noCache 105k,
   // which is between them, so the direction is unknowable and the ⓘ fires.
   const en = buildCodexPanelHtml(quota, now, "en", below);
-  assert.match(en, /≈ 115k tok/, "the headline is the none-written end");
+  assert.match(en, /≤ 115k tok/, "the none-written end, and a CEILING at a write weight below 1");
   assert.match(en, /was written to cache, the token-equivalent is ≈ 115k; if all of it was, ≈ 70k/);
   const ru = buildCodexPanelHtml(quota, now, "ru", below);
   assert.match(ru, /токен-эквивалент ≈ 115k; если записано всё — ≈ 70k/);
