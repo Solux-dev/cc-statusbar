@@ -1,0 +1,46 @@
+name: CI
+
+# Runs on every pull request, including ones from forks, so a contribution is
+# compiled and tested before anyone reads it. `pull_request` is deliberate:
+# unlike `pull_request_target` it checks out the FORK's code and hands it no
+# secrets, which is the only safe way to run code from a stranger.
+#
+# Also on pushes to master, so a fix pushed straight to the branch gets the same
+# check as one that arrived through a PR.
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+# Nothing here writes anywhere. publish.yml is the workflow with rights.
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run pointless; cancel it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      # `ci`, not `install`: it installs exactly what package-lock.json states
+      # and fails if the two have drifted, which is the point of running this at
+      # all — a green build that used different dependencies proves nothing.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Test
+        run: npm test
