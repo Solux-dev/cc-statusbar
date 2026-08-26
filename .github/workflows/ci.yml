@@ -12,6 +12,9 @@ on:
   push:
     branches:
       - master
+  # A button, so the check can be proved working without waiting for someone
+  # to open a pull request.
+  workflow_dispatch: {}
 
 # Nothing here writes anywhere. publish.yml is the workflow with rights.
 permissions:
