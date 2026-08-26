@@ -571,7 +571,10 @@ The plugin has two parts with different reliability:
   stated **and** priced in the token-equivalent, at the write weight: OpenAI
   documents it as a part of the input count, so it is counted once rather than
   twice. A payload that states no write count at all is not read as zero — the
-  figure is then a floor, and the ⓘ says so.
+  ⓘ then says which way the figure could move, and that is your write weight's
+  answer: above 1 it is a floor, below 1 a ceiling, at exactly 1 it cannot move.
+  A negative count is not a count at all and is treated as unstated, never as a
+  stated zero.
 
 **What the user does:** nothing. When the channel changes, a fix is released and
 — if installed from the Marketplace — **arrives as an automatic update**.

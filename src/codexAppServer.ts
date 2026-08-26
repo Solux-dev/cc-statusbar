@@ -237,12 +237,14 @@ function conciseError(err: unknown): string {
 }
 
 /** A stated write count is kept as stated, except that a negative one is not a
- *  count at all — the same sanitising the Claude side does to its counters. A
- *  missing field stays `null`: "not stated" and "stated as zero" are different
- *  answers and the panel says different things about them. */
+ *  count at all — the same sanitising the Claude side does to its counters. It
+ *  becomes `null`, NOT `0`: "not stated" and "stated as zero" are different
+ *  answers and the panel says different things about them, so rewriting a
+ *  corrupt field into a zero would put an invalid value in the one bucket that
+ *  silences the panel's uncertainty note. A missing field stays `null` too. */
 function clampWrite(n: number | null): number | null {
-  if (n == null) return null;
-  return Math.max(0, n);
+  if (n == null || n < 0) return null;
+  return n;
 }
 
 function tokenBreakdown(payload: unknown): CodexTokenUsageBreakdownSnapshot | null {

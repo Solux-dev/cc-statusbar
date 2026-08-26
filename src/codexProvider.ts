@@ -80,8 +80,12 @@ export function codexTotals(usage: CodexTokenUsage | null): Totals {
   // The write is clamped to what the reads leave, so the parts can never sum
   // past the whole. Codex states no cache TIER, so the write lands in the
   // unknown-lifetime bucket — the tiered ones stay 0, shown as unavailable
-  // rather than guessed.
-  const cacheWrite = Math.min(Math.max(0, total.cacheWriteInputTokens ?? 0), afterCached);
+  // rather than guessed. A `Totals` carries numbers, not the payload's
+  // stated/unstated distinction, so an absent count and a corrupt negative one
+  // both price as 0 here — which is exactly what `codexEconomy` prices for its
+  // own `null`, so the two paths still cannot disagree about one payload.
+  const stated = total.cacheWriteInputTokens;
+  const cacheWrite = Math.min(stated == null || stated < 0 ? 0 : stated, afterCached);
   const input = afterCached - cacheWrite;
   const output = total.outputTokens || 0;
   return {

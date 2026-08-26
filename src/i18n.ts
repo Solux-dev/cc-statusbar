@@ -7,7 +7,7 @@
 // strings live here as plain data + tiny formatters, so render.ts stays pure
 // and unit-testable in both languages.
 
-import { PaceLevel, CostDirection } from "./metrics";
+import { PaceLevel, CostDirection, BoundDirection } from "./metrics";
 
 export type Lang = "en" | "ru";
 export type LangSetting = "auto" | "en" | "ru";
@@ -94,7 +94,11 @@ export interface Messages {
    *  then priced as ordinary input, which is a floor: had any of it been written
    *  to cache, the true figure would be higher. `null` and `0` are different
    *  facts, so this is not the same as a payload stating zero writes. */
-  codexPanelWriteUnstatedHint: string;
+  // Which way an unstated write count could move the figure is decided by the
+  // write weight, not by the fact that it is unstated: above 1 the figure is a
+  // floor, below 1 a ceiling, at 1 it does not move at all. `cacheWriteWeight`
+  // is user-settable from 0 upward (`package.json`), so all three are reachable.
+  codexPanelWriteUnstatedHint: (weight: string, dir: BoundDirection) => string;
   codexLowerMult: (mult: string) => string;
   codexPanelUsageWaiting: string;
   codexPanelTokenCostNote: string;
@@ -146,7 +150,11 @@ export interface Messages {
    *  agents spent went on reloading context after a pause, and what share of
    *  their spend that is — the yardstick a per-agent % is read against. Shown
    *  only above the threshold — an advisory line that is always there is noise. */
-  panelSubagentsRebuild: (cost: string, share: string) => string;
+  // `share` is null where the measured share floors below 1% while part of the
+  // log could not be judged: "<1%" is a CEILING and the tokens beside it are a
+  // FLOOR, so stating both would put two opposite bounds on one measurement.
+  // The per-agent cells drop the share in that state; this line does the same.
+  panelSubagentsRebuild: (cost: string, share: string | null) => string;
   /** Explains the ≥ marker, shown only when something actually carries it. */
   panelAtLeastNote: string;
   /** The same rule in one clause, for the two places the `≥` can appear without
@@ -187,7 +195,15 @@ export interface Messages {
   // tooltip
   title: string;
   // token-equivalent headline: one compact line (with cache · without · ×lower)
-  costCompact: (withCache: string, noCache: string, mult: string | null, dir: CostDirection) => string;
+  // `canReverse` gates the "so far": the tooltip twin of `panelCostCompare`, and
+  // it must hedge on exactly the same condition — see `cacheCanReverse`.
+  costCompact: (
+    withCache: string,
+    noCache: string,
+    mult: string | null,
+    dir: CostDirection,
+    canReverse?: boolean
+  ) => string;
   // muted technical breakdown (tooltip + panel "Details")
   detailsLine: (work: string, cacheRead: string, cacheWrite: string) => string;
   // context window fill
@@ -355,10 +371,17 @@ const EN: Messages = {
     `Codex stated ${stated} tok written to cache, but only ${priced} tok of its input count are left ` +
     `once the cached reads are taken out, so ${priced} is all this figure could price. A breakdown ` +
     `larger than the total it breaks down cannot be applied in full.`,
-  codexPanelWriteUnstatedHint:
+  codexPanelWriteUnstatedHint: (weight, dir) =>
     "Codex stated no cache-write count for this session, so every input token outside the cached ones " +
-    "is priced as ordinary input. If some of it was in fact written to cache, the figure above is a " +
-    "floor — a write is priced by your `ccStatusbar.cacheWriteWeight`, not at the ordinary rate.",
+    "is priced as ordinary input. If some of it was in fact written to cache, " +
+    (dir === "floor"
+      ? `the figure above is a floor: your \`ccStatusbar.cacheWriteWeight\` (${weight}) prices a write ` +
+        `above ordinary input.`
+      : dir === "ceiling"
+      ? `the figure above is a ceiling: your \`ccStatusbar.cacheWriteWeight\` (${weight}) prices a write ` +
+        `below ordinary input.`
+      : `the figure above does not move: your \`ccStatusbar.cacheWriteWeight\` (${weight}) prices a write ` +
+        `exactly as ordinary input.`),
   codexLowerMult: (mult) => `(~${mult}× lower)`,
   codexPanelUsageWaiting: "Token-equivalent will appear after the next Codex response.",
   codexPanelTokenCostNote:
@@ -405,7 +428,9 @@ const EN: Messages = {
   panelSubagentsNote:
     "Models here are chosen by the agent that spawned each worker — the Lead, or another agent when depth > 1. Ask for a specific model in your task if a cheaper one would do: this is where delegated tokens actually go.",
   panelSubagentsRebuild: (cost, share) =>
-    `of that, ${cost} (${share} of what the agents spent) went on reloading context after pauses — an agent's cache usually stays warm for 5 minutes`,
+    `of that, ${cost}${
+      share ? ` (${share} of what the agents spent)` : ""
+    } went on reloading context after pauses — an agent's cache usually stays warm for 5 minutes`,
   panelSubagentsRebuildHint:
     "While an agent waits, its cache goes cold — usually 5 minutes for a subagent, an hour for the main " +
     "session, though each stream's own lifetime is read from its transcript rather than assumed. " +
@@ -437,7 +462,10 @@ const EN: Messages = {
     "after pauses — the share of that agent's own spend that went on loading its context again after a pause. " +
     "0% means no waiting cost was measured for it — every pause it took was judged, and none of them " +
     "priced to anything; " +
-    "a dash means the log did not allow the measurement, which is a different thing from zero. " +
+    "a dash means the log did not allow the measurement, which is a different thing from zero; " +
+    "a token figure with no percentage beside it means the measured share fell below 1% while part of " +
+    "the log could not be judged, so the tokens are given as a floor and the share is left out rather " +
+    "than stated as the ceiling it would have to be. " +
     "A figure above zero means one of its pauses outlasted its cache. This measurement does not look at " +
     "what filled the pause: the agent may have been left open while another one worked, or its own " +
     "command may have run long — a test run, a build.",
@@ -447,15 +475,15 @@ const EN: Messages = {
   atLeastShort: "≥ = measured from part of the log; the real figure can be higher, never lower",
   detailsRebuild: (tokens) => `reloads after pauses ${tokens}`,
   title: "**Claude Code — session usage**",
-  costCompact: (withCache, noCache, mult, dir) =>
+  costCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `token-equivalent with cache ≈ **${withCache}** · without cache ≈ **${noCache}**` +
     (dir === "same"
-      ? " (about the same so far)"
+      ? ` (about the same${canReverse ? " so far" : ""})`
       : !mult
       ? ""
       : dir === "more"
       ? ` (~${mult}× lower)`
-      : ` (~${mult}× higher so far)`),
+      : ` (~${mult}× higher${canReverse ? " so far" : ""})`),
   detailsLine: (work, cacheRead, cacheWrite) =>
     `ordinary in+out ${work} · cache: read ${cacheRead} / write ${cacheWrite}`,
   contextLine: (used, limit, pct) => `context: ${pct}% (${used} / ${limit})`,
@@ -556,7 +584,12 @@ const EN: Messages = {
   panelCacheTierLabel: "Cache stays warm",
   panelCacheTierValue: { "1h": "1 hour idle", "5m": "5 minutes idle" },
   panelCacheTierHint:
-    "How long your prompt cache stays warm while you are idle — read from this session, not configured. " +
+    // The clock runs between REQUESTS, not on whether you are at the keyboard:
+    // a six-minute test run cools a 5-minute cache while you type all the way
+    // through it. The label above ("1 hour idle") is about the session being
+    // idle and stays; this sentence used to pin it on the reader instead.
+    "How long your prompt cache stays warm between one request and the next — read from this session, " +
+    "not configured. " +
     "1-hour: a subscription within its plan limit, so stepping away for up to an hour stays cheap. " +
     "5-minute: an API key, paid usage after you pass your plan limit, or (usually) a subagent — short breaks rebuild the cache and cost more. " +
     "Check it once to know how long a break you can take; you do not need to watch it.",
@@ -643,10 +676,17 @@ const RU: Messages = {
     `Codex сообщил ${stated} ток., записанных в кэш, но после вычета чтений из кэша в его счётчике ` +
     `ввода остаётся только ${priced} ток. — столько это число и смогло оценить. Часть не может быть ` +
     `больше целого, из которого её выделяют.`,
-  codexPanelWriteUnstatedHint:
+  codexPanelWriteUnstatedHint: (weight, dir) =>
     "Счётчик записи в кэш Codex для этой сессии не сообщил, поэтому весь ввод сверх прочитанного из " +
-    "кэша оценён как обычный. Если часть его всё-таки записывалась в кэш, число выше — нижняя граница: " +
-    "запись считается по вашему параметру `ccStatusbar.cacheWriteWeight`, а не по обычной ставке.",
+    "кэша оценён как обычный. Если часть его всё-таки записывалась в кэш, " +
+    (dir === "floor"
+      ? `число выше — нижняя граница: ваш параметр \`ccStatusbar.cacheWriteWeight\` (${weight}) ` +
+        `оценивает запись дороже обычного ввода.`
+      : dir === "ceiling"
+      ? `число выше — верхняя граница: ваш параметр \`ccStatusbar.cacheWriteWeight\` (${weight}) ` +
+        `оценивает запись дешевле обычного ввода.`
+      : `число выше не изменится: ваш параметр \`ccStatusbar.cacheWriteWeight\` (${weight}) ` +
+        `оценивает запись ровно как обычный ввод.`),
   codexLowerMult: (mult) => `(в ~${mult}× меньше)`,
   codexPanelUsageWaiting: "Токен-эквивалент появится после следующего ответа Codex.",
   codexPanelTokenCostNote:
@@ -693,7 +733,9 @@ const RU: Messages = {
   panelSubagentsNote:
     "Модель выбирает тот, кто запустил агента: лид — или другой агент, если уровень больше 1. Если задача проще, попросите конкретную модель прямо в ТЗ: именно сюда уходят делегированные токены.",
   panelSubagentsRebuild: (cost, share) =>
-    `из них ${cost} (${share} расхода агентов) ушло на повторную загрузку контекста после пауз — кэш агента обычно держится 5 минут`,
+    `из них ${cost}${
+      share ? ` (${share} расхода агентов)` : ""
+    } ушло на повторную загрузку контекста после пауз — кэш агента обычно держится 5 минут`,
   panelSubagentsRebuildHint:
     "Пока агент ждёт, его кэш остывает — обычно 5 минут у субагента и час у основной сессии, но срок " +
     "жизни каждого кэша читается из его же журнала, а не предполагается. " +
@@ -725,7 +767,10 @@ const RU: Messages = {
     "после пауз — доля расхода самого агента, ушедшая на повторную загрузку его контекста после паузы. " +
     "0% значит, что расхода на ожидание у него не обнаружено — все паузы измерены, и ни одна ничего " +
     "не стоила; " +
-    "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль. " +
+    "прочерк значит, что измерить по журналу не удалось, а это не то же самое, что ноль; " +
+    "цифра токенов без процента рядом значит, что измеренная доля оказалась меньше 1%, а часть журнала " +
+    "оценить не удалось: токены названы нижней границей, а доля опущена — иначе её пришлось бы назвать " +
+    "верхней, то есть в обратную сторону. " +
     "Цифра больше нуля значит, что одна из пауз пережила его кэш. Чем была занята пауза, этот замер не " +
     "смотрит: агента могли держать открытым, пока работал другой, а могла долго идти его собственная " +
     "команда — прогон тестов, сборка.",
@@ -735,15 +780,15 @@ const RU: Messages = {
   atLeastShort: "≥ — измерено не по всему журналу; настоящее число может быть больше, но не меньше",
   detailsRebuild: (tokens) => `повторные загрузки после пауз ${tokens}`,
   title: "**Claude Code — расход сессии**",
-  costCompact: (withCache, noCache, mult, dir) =>
+  costCompact: (withCache, noCache, mult, dir, canReverse = true) =>
     `токен-эквивалент с кэшем ≈ **${withCache}** · без кэша ≈ **${noCache}**` +
     (dir === "same"
-      ? " (пока примерно столько же)"
+      ? ` (${canReverse ? "пока " : ""}примерно столько же)`
       : !mult
       ? ""
       : dir === "more"
       ? ` (в ~${mult}× меньше)`
-      : ` (пока в ~${mult}× больше)`),
+      : ` (${canReverse ? "пока " : ""}в ~${mult}× больше)`),
   detailsLine: (work, cacheRead, cacheWrite) =>
     `обычные ввод+вывод ${work} · кэш: чтение ${cacheRead} / запись ${cacheWrite}`,
   contextLine: (used, limit, pct) => `контекст: ${pct}% (${used} / ${limit})`,
@@ -841,7 +886,8 @@ const RU: Messages = {
   panelCacheTierLabel: "Кэш держится",
   panelCacheTierValue: { "1h": "1 час простоя", "5m": "5 минут простоя" },
   panelCacheTierHint:
-    "Сколько prompt-кэш остаётся «тёплым», пока вы не печатаете — определяется из этой сессии, не настраивается. " +
+    "Сколько prompt-кэш остаётся «тёплым» между одним запросом и следующим — определяется из этой сессии, " +
+    "не настраивается. " +
     "Часовой: подписка в пределах лимита плана — можно отойти на час, и это дёшево. " +
     "5-минутный: API-ключ, платный расход после превышения плана или (обычно) субагент — короткие паузы перестраивают кэш и стоят дороже. " +
     "Достаточно глянуть один раз, чтобы понять, какую паузу можно себе позволить; постоянно следить не нужно.",

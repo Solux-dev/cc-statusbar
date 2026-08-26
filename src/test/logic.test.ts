@@ -3548,7 +3548,7 @@ test("the reload advice describes what the waiting agent pays, not a fresh agent
 
 // ---------------------------------------------------------------------------
 // Round 15 — the fifteenth review. The advice used to open by naming ONE cause
-// ("usually an agent left open while another one works"). Re-measured on 503
+// ("usually an agent left open while another one works"). Re-measured on 507
 // agent logs here: 188 of the 448 counted gaps, carrying 46% of the tokens, run
 // from the agent's own Bash tool_use to its tool_result — a test suite, a build.
 // The measurement is a gap longer than the cache's life and nothing more; it
@@ -3603,7 +3603,7 @@ test("the idle legend states a pause, never what the measurement did not look at
   // Round 15. `idleRebuildOf` compares two timestamps against the live cache
   // lifetime and never reads what lies between them, so "its cache went cold
   // while it was left open" asserted a cause the measurement cannot see — and
-  // on this machine's 503 agent logs it is the wrong cause for 46% of the
+  // on this machine's 507 agent logs it is the wrong cause for 46% of the
   // tokens it counts.
   const en = buildPanelHtml(
     IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
@@ -3821,7 +3821,8 @@ test("the Russian UI has no English left in it where a fact is missing", () => {
 
 test("a cache-write count Codex states is shown, not silently dropped", () => {
   // Round 14. The field exists in Codex's protocol (`cache_write_input_tokens`)
-  // and is 0 in all 109,746 turns measured on this machine — but a stated
+  // and is 0 in all 54,873 turns measured on this machine (109,746 was a count
+  // of field occurrences: the counter appears twice in every event) — but a stated
   // non-zero must not vanish from a panel about token cost. Round 16 settled how
   // it enters the figure: OpenAI documents `input_tokens_details` as a breakdown
   // of `input_tokens` with `ordinary = input − cached − cache_write`, so a write
@@ -4070,6 +4071,117 @@ test("the 'so far' is dropped wherever no weight can narrow the gap", () => {
   assert.ok(
     !/less, so far/.test(buildPanelHtml(warmup, { cacheRead: 2, cacheWrite: 1.25 }, QUOTA_OFF, 1000, "en"))
   );
+
+  // Round 18. The HOVER is the fourth surface and had the hedge hard-coded: the
+  // panel and the Codex hover both dropped it, this one did not, so one tick
+  // told the same reader two different things about the same two numbers.
+  const locked2 = { cacheRead: 2, cacheWrite: 1.25 };
+  const hoverLocked = buildView(WARMUP_TOTALS, locked2, QUOTA_OFF, 1000, "en").tooltip;
+  assert.match(hoverLocked, /× higher\)/);
+  assert.ok(!/higher so far/.test(hoverLocked), "the hover must drop it wherever the panel does");
+  assert.ok(!/пока в ~/.test(buildView(WARMUP_TOTALS, locked2, QUOTA_OFF, 1000, "ru").tooltip));
+  // At the default weights a read at 0.1 can still narrow it, so the hedge is
+  // honest and stays — the same hover, the same numbers, a different setting.
+  assert.match(buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en").tooltip, /higher so far/);
+  assert.match(buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "ru").tooltip, /пока в ~/);
+});
+
+test("an unstated Codex write count bounds the figure the way the WEIGHT says, not always downward", () => {
+  // Round 18. "The figure above is a floor" was stated unconditionally, but the
+  // bound belongs to `cacheWriteWeight`, which `package.json` allows from 0:
+  // above 1 the unstated write would raise the figure, below 1 it would lower
+  // it, and at exactly 1 it cannot move it at all. Naming the wrong side is
+  // worse than naming none.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  // No write counter stated, and ordinary input left for one to have hidden in.
+  const usage = {
+    totalTokens: 105_000, lastTokens: 105_000,
+    inputTokens: 100_000, cachedInputTokens: 40_000,
+    outputTokens: 5000, reasoningOutputTokens: 0,
+  };
+  const at = (cacheWrite: number, lang: "en" | "ru") =>
+    buildCodexPanelHtml(quota, now, lang, { source: "stdio" as const, weights: { cacheRead: 0.1, cacheWrite }, usage });
+
+  assert.match(at(1.25, "en"), /the figure above is a floor: your `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
+  assert.match(at(1.25, "ru"), /число выше — нижняя граница: ваш параметр `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
+
+  const ceiling = at(0.5, "en");
+  assert.match(ceiling, /the figure above is a ceiling: your `ccStatusbar\.cacheWriteWeight` \(0\.5\)/);
+  assert.ok(!/is a floor/.test(ceiling), "a write priced below fresh input makes the same figure a ceiling");
+  assert.match(at(0.5, "ru"), /число выше — верхняя граница/);
+
+  const exact = at(1, "en");
+  assert.match(exact, /the figure above does not move/);
+  assert.ok(!/floor|ceiling/.test(exact), "at 1 a write is priced as ordinary input, so there is no bound");
+  assert.match(at(1, "ru"), /число выше не изменится/);
+});
+
+test("a negative Codex write count is not a count, and never becomes a stated zero", () => {
+  // Round 18. `clampWrite` said in its own comment that a negative "is not a
+  // count at all", then returned `Math.max(0, n)` — which put a corrupt field in
+  // the one bucket that SILENCES the uncertainty note. -1 must read exactly as
+  // "the payload said nothing", not as "the payload said zero".
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const base = {
+    totalTokens: 105_000, lastTokens: 105_000,
+    inputTokens: 100_000, cachedInputTokens: 40_000,
+    outputTokens: 5000, reasoningOutputTokens: 0,
+  };
+  const panel = (cacheWriteInputTokens: number | null) =>
+    buildCodexPanelHtml(quota, now, "en", {
+      source: "stdio" as const,
+      weights: { cacheRead: 0.1, cacheWrite: 1.25 },
+      usage: { ...base, cacheWriteInputTokens },
+    });
+  const negative = panel(-1);
+  assert.match(negative, /Codex stated no cache-write count for this session/);
+  assert.equal(negative, panel(null), "a negative and a missing field are the same answer");
+  // A stated zero is a different answer: the count IS known, so the note that
+  // exists to flag the unknown must not appear.
+  const zero = panel(0);
+  assert.ok(!/Codex stated no cache-write count/.test(zero), "a stated zero is a measurement, not a silence");
+  assert.notEqual(zero, negative);
+});
+
+test("a reload share below 1% with unjudged gaps states the tokens, never a ceiling beside a floor", () => {
+  // Round 18. The summary printed "≥ 1M (<1%)": the tokens a FLOOR, the share a
+  // CEILING, two opposite bounds on one measurement — while `agentIdle` had
+  // already settled the rule for the per-agent cells by dropping the share.
+  // Reachable only by calling the renderer directly (`rebuildDisplay` gates on
+  // 3% of the SESSION, and the agents are a subset of it), which is why it is
+  // pinned here rather than through a transcript fixture.
+  const totals = {
+    input: 30_000_000, output: 0, work: 30_000_000,
+    cacheRead: 0, cacheWrite: 0,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 0,
+  };
+  // 800k five-minute tokens x 1.25 = exactly the 1M the row needs, and 1M is
+  // 3.33% of the 30M session — but only 0.5% of the 200M the agents spent.
+  const reb = {
+    tokens: 800_000, tokens1h: 0, tokens5m: 800_000, tokensUnknown: 0,
+    cacheWrite: 5_000_000, streams: 1, unjudged: 1,
+  };
+  const subs = [{
+    agentType: "explore", description: "d", modelId: "m", modelLabel: "Opus 5",
+    effort: "high", effective: 200_000_000, rebuild: reb,
+  }];
+  const en = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en", undefined, undefined, undefined, subs, 0, { subagents: reb }, false);
+  assert.match(en, /of that, ≥ 1M went on reloading context after pauses/);
+  assert.ok(!/&lt;1%/.test(en), "a ceiling must not be printed beside the floor it contradicts");
+  const ru = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru", undefined, undefined, undefined, subs, 0, { subagents: reb }, false);
+  assert.match(ru, /из них ≥ 1M ушло на повторную загрузку/);
+  assert.ok(!/&lt;1%/.test(ru));
+  // The per-agent cell is the same shape and the same rule, and the legend that
+  // sits under it now describes it — it used to explain three shapes (`0%`, a
+  // dash, a percentage) and leave this fourth one unexplained. The legend lives
+  // inside the fold, so this half is asserted with the list open.
+  const open = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en", undefined, undefined, undefined, subs, 0, { subagents: reb }, true);
+  assert.match(open, /after pauses ≥ 1M<\/span>/);
+  assert.match(open, /a token figure with no percentage beside it/);
+  const openRu = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru", undefined, undefined, undefined, subs, 0, { subagents: reb }, true);
+  assert.match(openRu, /цифра токенов без процента рядом/);
 });
 
 test("an arithmetic zero is a zero, not a premium of 0.0000000000146 tokens", () => {

@@ -549,6 +549,21 @@ export function fmtTokens(n: number, floor = false): string {
  *  "same" covers the break-even case AND anything that rounds to 1×, so the UI
  *  never prints "~1× more" for two numbers it cannot tell apart. Pure. */
 export type CostDirection = "more" | "same" | "less";
+
+/** Which side of a printed figure the unknown lies on. A bound is only a floor
+ *  while the unknown is priced ABOVE what we assumed in its place; price it
+ *  below and the same figure is a ceiling, price it the same and there is no
+ *  bound at all. Naming the wrong side is worse than naming none. */
+export type BoundDirection = "floor" | "exact" | "ceiling";
+
+/** The bound an unstated cache-write count puts on a token-equivalent that
+ *  priced those tokens as ordinary input: the write weight decides it, and
+ *  nothing else does. Pure. */
+export function writeBound(cacheWriteWeight: number): BoundDirection {
+  if (cacheWriteWeight > 1) return "floor";
+  if (cacheWriteWeight < 1) return "ceiling";
+  return "exact";
+}
 export function costDirection(
   effective: number,
   noCache: number

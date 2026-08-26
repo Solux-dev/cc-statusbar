@@ -73,8 +73,9 @@ explicitly wired into `extension.ts`.
 > token-equivalent all come from the app-server and local rollouts. What is
 > still true from the plan: `buildCodexSnapshot` / `ProviderSnapshot` in
 > `src/codexProvider.ts` remain the unused abstraction this roadmap proposed —
-> the shipped path reads `CodexQuotaDetails` directly. Test count is now 251,
-> not 48.
+> the shipped path reads `CodexQuotaDetails` directly. Test count is 258 as of
+> 26 August 2026, not the 48 this roadmap was written against — a count moves
+> with every round, so it is dated here rather than left to drift.
 
 ## Product Principles
 
@@ -699,6 +700,12 @@ Failure cases:
 
 ## Suggested Next Session Start
 
+> **Done, and kept as the record of how it was planned.** Everything in this
+> section shipped: the provider setting, the selection commands, the resolver
+> and its tests are all in `src/codexProvider.ts` and `src/extension.ts`. Read
+> it as history. The one item that did NOT ship is `buildCodexSnapshot` /
+> `ProviderSnapshot` — see the status note near the top of this file.
+
 Start with these steps:
 
 1. Read `docs/codex-statusbar-plan.md`.
@@ -716,4 +723,3 @@ The best first slice is:
 - conflict result type
 - Claude adapter still feeding the existing renderer
 - tests for resolver behavior
-

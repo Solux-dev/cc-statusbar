@@ -41,6 +41,43 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The hover promised a turn the arithmetic forbids.** Round 17 taught three of
+  the four cost lines to drop “so far” wherever no weight is below 1 — the point
+  where the gap between the two figures can only widen. The Claude **hover** was
+  the fourth and had the hedge written into the sentence, so on one tick, with
+  one set of numbers, the hover said the gap might still close and the panel
+  beside it said it could not.
+- **“The figure above is a floor” was only true above a write weight of 1.**
+  Where Codex states no cache-write count, the panel prices that input as
+  ordinary and the ⓘ says which way the real figure could move. It said “floor”
+  always. But the bound belongs to `ccStatusbar.cacheWriteWeight`, which is
+  settable from 0: above 1 the unstated write would raise the figure, below 1 it
+  would *lower* it, and at exactly 1 it cannot move it at all. The ⓘ now names
+  the right side and quotes the weight it read.
+- **A corrupt negative write count became a stated zero.** The parser's own
+  comment said a negative “is not a count at all”, then folded it to `0` — which
+  is the one value that *silences* the uncertainty note, so an invalid field
+  read as a confident measurement. A negative now reads as “Codex stated
+  nothing”, on both the parse boundary and the renderer.
+- **A share below 1% was printed as a ceiling next to a floor.** With unjudged
+  gaps the summary line put `≥` on the tokens and `<1%` on the share — a lower
+  bound and an upper bound on the same measurement, in the same sentence. The
+  per-agent cells had already settled this by dropping the share; the summary
+  now does the same, and the legend explains that shape instead of describing
+  only the three it used to.
+- **The cache-lifetime ⓘ pinned the clock on the reader.** It said the cache
+  stays warm “while you are idle” (RU: «пока вы не печатаете»). The clock runs
+  between one request and the next: a six-minute test run cools a five-minute
+  cache while you type all the way through it.
+- **Published numbers and their sources.** The reload denominator was still
+  `236.8M` in two files after the re-measurement moved it to `237.2M`; two test
+  comments still cited 503 agent logs and one still called 109,746 field
+  occurrences “turns”; the Codex roadmap stated a test count three releases old
+  and told the next session to build what had already shipped; and the Codex
+  plan carried OpenAI cache figures that no longer match the source. Re-read at
+  developers.openai.com on 26 August 2026: the 1,024-token minimum applies to
+  GPT-5.6 and later (2,048 before that), GPT-5.6+ has one retention value
+  (`30m`), and `gpt-5.5` is not limited to `24h`.
 - **The hover still said “tier”.** 1.0.24 dropped that word from the panel but
   missed the same line in the hover, so one fact had two names: “Cache stays
   warm — 1 hour idle” in the panel, “1-hour tier” in the hover. Both now read
@@ -129,10 +166,14 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   writes as ordinary input while the renderer priced them properly, so the same
   payload gave 69k through one path and 72k through the other. Both now use the
   same three-bucket split.
-- **A lower bound below 1% lost its marker.** With unjudged gaps and a measured
-  0.6% share the summary printed `≈ 1.3M (<1%)`, presenting a floor as a
-  measurement. The token figure keeps its `≥` now; only the percentage drops it,
-  because `≥ <1%` says nothing.
+- **A lower bound below 1% lost its marker.** With unjudged gaps and a share
+  that floors below 1%, the summary printed `≈ 1.3M (<1%)`, presenting a floor
+  as a measurement. The token figure keeps its `≥` now, and the share is dropped
+  rather than printed: `<1%` is a ceiling, the tokens beside it are a floor, and
+  two opposite bounds on one measurement contradict each other. This is the rule
+  the per-agent cells already followed. (A state reached by calling the renderer
+  directly, not by any session on this machine: the row only appears at 3% of
+  the session, and the agents are a subset of it.)
 - **The Codex panel named a cause for a difference it does not print.** Pricing
   the write made this state reachable there for the first time: 1.2M of input
   with a 40k write leaves a 10k premium, both figures print as `1.2M`, the line
@@ -145,7 +186,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   Everything now quotes the same 507 logs, re-measured 26 August 2026.
 - **Two published numbers overstated what was measured.** “Over half of
   everything subagents write to cache” is 48% across the 507 agent logs measured
-  here (114.4M reload tokens against 236.8M written); it reaches 54% only once
+  here (114.4M reload tokens against 237.2M written); it reaches 54% only once
   each agent's unavoidable first load is set aside, which the sentence did not
   say. And the Codex sample of “109,746 turns” was a count of field
   occurrences — the counter appears twice in every `token_count` event, in

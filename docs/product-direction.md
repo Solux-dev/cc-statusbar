@@ -69,6 +69,13 @@ Two independent reasons:
   undiscovered GitHub project may get no signal for months, which is itself a
   reason not to force the feature.
 
+> **Correction, 26 August 2026 (round 18).** "Unambiguous" did not survive the
+> measurement. The signal sees a gap longer than the cache's life and nothing
+> else: on 507 agent logs, 188 of the 448 counted gaps — 46% of the tokens —
+> span the agent's own `Bash` call, a test run or a build, not a person stepping
+> away. The paragraph below is kept as the record of what we believed then; the
+> shipped feature names the pause, never its cause, and calls nothing "waste".
+
 The only *unambiguous* waste signal we found is **idle gap → context re-cache**
 (a >5 min pause lets the prompt cache cool, so the next turn re-pays to rebuild
 context as cache-write ×1.25 instead of cache-read ×0.1). If we ever revisit,

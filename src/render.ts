@@ -19,6 +19,7 @@ import {
   CACHE_WRITE_WEIGHT_5M,
   effectiveTokens,
   costDirection,
+  writeBound,
   rebuildCost,
   fmtTokens,
   fmtMult,
@@ -546,10 +547,13 @@ function codexEconomy(
   const afterCached = Math.max(0, details.usage.inputTokens - cachedInput);
   // `null` stays null all the way to the ⓘ: "the payload stated nothing" and
   // "the payload stated zero" are different facts, and only the first of them
-  // makes the figure below a floor rather than a measurement.
-  const writeStated = details.usage.cacheWriteInputTokens == null
-    ? null
-    : Math.max(0, details.usage.cacheWriteInputTokens);
+  // leaves the figure below bounded rather than measured. A NEGATIVE count is
+  // not a third fact — it is not a count, so it joins "stated nothing"; folding
+  // it to 0 instead would put a corrupt field in the one bucket that silences
+  // the ⓘ. Same rule as `clampWrite` at the parse boundary; repeated here
+  // because this function is exported and callable without it.
+  const statedRaw = details.usage.cacheWriteInputTokens;
+  const writeStated = statedRaw == null || statedRaw < 0 ? null : statedRaw;
   const writeInput = Math.min(writeStated ?? 0, afterCached);
   const freshInput = afterCached - writeInput;
   // Codex total_tokens = input_tokens + output_tokens; reasoning is a detail of output.
@@ -613,10 +617,11 @@ function codexDetailsLine(details: CodexQuotaDetails, m: Messages): string {
 
 /** Codex's stated cache-write count, or null when it stated none. Never
  *  rewritten into a zero: "the payload said 0" and "the payload said nothing"
- *  are different answers, and the panel prints different text for each. */
+ *  are different answers, and the panel prints different text for each — and a
+ *  negative is neither a count nor a zero, so it reads as "said nothing". */
 function codexCacheWrite(details: CodexQuotaDetails): number | null {
   const n = details.usage?.cacheWriteInputTokens;
-  return n == null ? null : Math.max(0, n);
+  return n == null || n < 0 ? null : n;
 }
 
 function bar(pct: number, width = 8): string {
@@ -778,7 +783,18 @@ export function buildView(
     t.push(RULE);
     t.push("");
   }
-  t.push(m.costCompact(fmtTokens(eff), fmtTokens(noCache), mult, costDir));
+  // Same hedge, same condition as the panel twelve lines below: the tooltip and
+  // the panel are two views of one tick, and a "so far" on one and not the other
+  // tells the same reader two different things about the same two numbers.
+  t.push(
+    m.costCompact(
+      fmtTokens(eff),
+      fmtTokens(noCache),
+      mult,
+      costDir,
+      cacheCanReverse(weights, [CACHE_WRITE_WEIGHT_1H, CACHE_WRITE_WEIGHT_5M, weights.cacheWrite])
+    )
+  );
   t.push("");
 
   const quotaLine = (label: string, w: QuotaWindow | null, windowSec: number): string => {
@@ -1212,20 +1228,19 @@ export function buildPanelHtml(
     const rebUnjudged = (rebuild?.subagents?.unjudged ?? 0) > 0;
     const rawShare = subTotal > 0 ? (reb.cost / subTotal) * 100 : 0;
     const rebShare = rebUnjudged ? Math.floor(rawShare) : Math.round(rawShare);
-    const rebShareText = rebShare === 0 && reb.cost > 0 ? "<1" : String(rebShare);
-    // The marker follows the MEASUREMENT, not the printed percentage. A share
-    // that floors to "<1" is still a floor, and the token figure beside it is
-    // one too — dropping the ≥ there would present a bound as a measurement.
-    // "≥ <1%" reads as nonsense, so the share alone loses the marker while the
-    // tokens keep it, the same split the per-agent rows already make.
     const rebAtLeast = rebUnjudged && reb.cost > 0;
-    const rebShareAtLeast = rebAtLeast && rebShare > 0;
+    // "<1%" is an UPPER bound on the share, and with unjudged gaps the tokens
+    // beside it are a LOWER one. Two opposite bounds on a single measurement is
+    // not a hedge, it is a contradiction — and "≥ <1%" is not a way out of it.
+    // So the share is dropped entirely there, exactly as `agentIdle` drops it
+    // in the per-agent cells; everywhere else it keeps the marker the tokens do.
+    const rebShareText =
+      rebAtLeast && rebShare === 0
+        ? null
+        : `${rebAtLeast ? "≥" : ""}${rebShare === 0 && reb.cost > 0 ? "<1" : String(rebShare)}%`;
     const rebuildRow = reb.show
       ? `<div class="sub">${hintSpan(
-          m.panelSubagentsRebuild(
-            `${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`,
-            `${rebShareAtLeast ? "≥" : ""}${rebShareText}%`
-          ),
+          m.panelSubagentsRebuild(`${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`, rebShareText),
           rebAtLeast ? `${m.panelSubagentsRebuildHint} ${m.panelAtLeastNote}` : m.panelSubagentsRebuildHint
         )}</div>`
       : "";
@@ -1394,12 +1409,17 @@ export function buildCodexPanelHtml(
     // tiers have Codex twins instead of being reused.
     // Three different facts, three different sentences — and the priced one
     // quotes what was PRICED, never the raw count the clamp may have cut down.
+    const readW = details.weights?.cacheRead ?? 0.1;
+    const writeW = details.weights?.cacheWrite ?? 1.25;
     const writeNote =
       economy.writeStated == null
         ? // Only worth saying where it could have changed the figure: with no
           // ordinary input left, an unstated write count could not have moved it.
+          // …and which WAY it could have moved it is the write weight's answer,
+          // not the fact that the count is missing: a weight below 1 makes the
+          // very same figure a ceiling. `cacheWriteWeight` goes down to 0.
           economy.ordinaryInput > 0
-          ? ` ${m.codexPanelWriteUnstatedHint}`
+          ? ` ${m.codexPanelWriteUnstatedHint(String(writeW), writeBound(writeW))}`
           : ""
         : economy.writeStated > economy.writeInput
         ? ` ${m.codexPanelWriteClampedHint(fmtTokens(economy.writeStated), fmtTokens(economy.writeInput))}`
@@ -1413,8 +1433,6 @@ export function buildCodexPanelHtml(
     // time — 1.2M input with a 40k write leaves a 10k premium that both figures
     // print as `1.2M`, and naming a cause over a difference the page does not
     // show is the defect rounds 10 and 12 closed on the Claude panel.
-    const readW = details.weights?.cacheRead ?? 0.1;
-    const writeW = details.weights?.cacheWrite ?? 1.25;
     const readDelta = economy.cachedInput * (readW - 1);
     const writeDelta = economy.writeInput * (writeW - 1);
     const costHint =

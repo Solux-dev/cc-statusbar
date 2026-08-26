@@ -8,12 +8,13 @@ rule). Extends [`cache-tier-spec.md`](cache-tier-spec.md) — read that first.
 
 ## Goal (one sentence)
 
-Show **what waiting costs**: when an agent sits idle longer than its cache
-lives, it reloads its whole context and pays for it again — today that spend is
-invisible, and it is 48% of everything our subagents write to cache — 54% once
-each agent's unavoidable first load is set aside. (Re-measured round 16 over 507
-agent logs: 114.4M reload tokens against 236.8M written in total. The original
-"over half" used the narrower denominator without saying so.)
+Show **what waiting costs**: when an agent's next turn comes later than its
+cache lives — whatever filled that pause — it reloads its whole context and
+pays for it again. Today that spend is invisible, and it is 48% of everything
+our subagents write to cache — 54% once
+each agent's unavoidable first load is set aside. (Re-measured 26 August 2026,
+round 17, over 507 agent logs: 114.4M reload tokens against 237.2M written in
+total. The original "over half" used the narrower denominator without saying so.)
 
 ## Why this, now — the measurement
 
@@ -123,11 +124,12 @@ became collapsible: the closing note it used to lead sits inside the collapsed
 block and is invisible by default, so an advice sentence appended to it would
 disappear with the list. The actionable half has to survive the fold.
 
-### Panel — the lead's own idle time
+### Panel — the lead's own pauses
 
 Reported in `Details` only, as a muted fragment, with no advice attached:
-`… · reloads after pauses 900k`. The owner stepping away is not a defect, and
-the confounders there are real.
+`… · reloads after pauses 900k`. A pause in the main session is not a defect —
+it may be the owner stepping away or a long command of their own, and the
+measurement cannot tell — so nothing is advised on top of the number.
 
 ### Tooltip (hover) — one fragment, high bar
 
@@ -148,8 +150,10 @@ No new segment. The bar stays quota + context.
 
 Every string in this feature obeys all five:
 
-1. **Name the thing, not the mechanism.** "Rebuilt after idle", not
-   "cache_creation after TTL expiry".
+1. **Name the thing, not the mechanism.** "Reloaded after a pause", not
+   "cache_creation after TTL expiry". (The example used to read "Rebuilt after
+   idle" — which broke rule 3 below by naming a cause the measurement cannot
+   see. Corrected 26 August 2026, round 18, to match the shipped label.)
 2. **A number is followed by its meaning.** `≈6M tok · 7% of session` — the
    absolute figure alone means nothing to a first-time reader.
 3. **State only the cause the data carries, and never a verdict.** The
@@ -311,8 +315,8 @@ re-order separately from the numbers change — see open question 1.
 - No per-pause list ("agent X idled 12 min ×4") — that is a wall of text for a
   number the user can act on in aggregate.
 - No history/persistence. Still shelved.
-- No guidance for the lead's own idle time: the owner stepping away is not a
-  defect, and the confounders there are real.
+- No guidance for the lead's own pauses: a pause in the main session is not a
+  defect, and the measurement cannot say what filled it.
 
 ## Test plan (pure logic, mirroring the existing suite)
 
