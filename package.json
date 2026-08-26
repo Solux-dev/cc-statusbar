@@ -1,7 +1,7 @@
 {
   "name": "cc-statusbar",
   "displayName": "Claude/Codex Usage — Quota & Context Statusbar",
-  "description": "See Claude Code and Codex quota, context, token-equivalent, and cache signals right in the VS Code status bar. Switch between Auto, Claude Code, and Codex from the hover menu.",
+  "description": "Never hit your Claude Code or Codex limit by surprise. Quota, context window, and what your sub-agents cost — live in the status bar. Works in VS Code, Cursor, Windsurf and VSCodium.",
   "version": "1.0.26",
   "publisher": "solux-dev",
   "license": "MIT",

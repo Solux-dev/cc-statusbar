@@ -1054,9 +1054,17 @@ function hintSpan(label: string, hint: string): string {
   return `<span class="hint" tabindex="0">${esc(label)} ⓘ<span class="tip">${esc(hint)}</span></span>`;
 }
 
-/** Styling for `hintSpan`, identical in both panels. */
+/** Styling for `hintSpan`, identical in both panels.
+ *
+ *  Nothing on the way down to a `.tip` may dim itself with `opacity`. Opacity
+ *  multiplies through the whole subtree, so a muted label was taking its
+ *  footnote with it and the page read straight through the box — worst where
+ *  the label was dimmed twice over (a `.sub` line inside a hinted row). Labels
+ *  are muted with COLOUR from here on; the overrides below undo the opacity the
+ *  containers still set for their unhinted neighbours. */
 const HINT_CSS = `
-  .hint { position:relative; opacity:.9; border-bottom:1px dotted currentColor; cursor:help; outline:none; }
+  .hint { position:relative; border-bottom:1px dotted currentColor; cursor:help; outline:none; }
+  .row .hint { opacity:1; color:var(--vscode-descriptionForeground, var(--vscode-foreground)); }
   .hint .tip {
     visibility:hidden; opacity:0; position:absolute; left:0; bottom:140%; z-index:10;
     /* Viewport-aware: the panel can be docked into a narrow side column, and the
@@ -1289,6 +1297,14 @@ export function buildPanelHtml(
     // number: a column of "—" teaches nothing and costs every row its width.
     const idles = shown.map((a) => agentIdle(a, weights));
     const anyIdle = idles.some((i) => i.known);
+    // The column defines itself in its own cell's ⓘ rather than in a paragraph
+    // under the list. The definition is read once and never again, and as
+    // running text it was longer than every row it explained put together.
+    // The ≥ is defined next to it only where a cell actually carries one — an
+    // explanation of a marker nobody can see is just more text to read.
+    const idleHint = idles.some((i) => i.atLeast)
+      ? `${m.panelAgentIdleLegend} ${m.panelAtLeastNote}`
+      : m.panelAgentIdleLegend;
     const listRows = shown
       .map((a, i) => {
         const depth = a.spawnDepth && a.spawnDepth > 1 ? m.subagentDepth(a.spawnDepth) : null;
@@ -1301,26 +1317,20 @@ export function buildPanelHtml(
         // error, 31% of a large one is worth changing how you work.
         const idleCell = !anyIdle
           ? ""
-          : `<span class="idle">${esc(
+          : `<span class="idle">${hintSpan(
               idle.known
                 ? m.panelAgentIdle(
                     idle.pctText,
                     idle.cost > 0 ? fmtTokens(idle.cost, idle.atLeast) : null,
                     idle.atLeast
                   )
-                : m.panelAgentIdleUnknown
+                : m.panelAgentIdleUnknown,
+              idleHint
             )}</span>`;
         return `<div class="arow"><b>≈ ${fmtTokens(a.effective)}</b><span>${esc(who)}${esc(what)}</span>${idleCell}</div>`;
       })
       .join("");
     const more = subagents.length > LIST_CAP ? `<div class="sub">${esc(m.subagentsMore(subagents.length - LIST_CAP))}</div>` : "";
-    // The ≥ is explained only where one is actually shown — an explanation of a
-    // marker nobody can see is just more text to read.
-    const idleLegend = anyIdle
-      ? `<div class="sub">${esc(
-          idles.some((i) => i.atLeast) ? `${m.panelAgentIdleLegend} ${m.panelAtLeastNote}` : m.panelAgentIdleLegend
-        )}</div>`
-      : "";
 
     // What waiting cost. One muted line in the same style as the summary above
     // it, carrying three facts: how much, why, and how long an agent's cache
@@ -1354,7 +1364,7 @@ export function buildPanelHtml(
               : String(rebShare)
           }%`;
     const rebuildRow = reb.show
-      ? `<div class="sub">${hintSpan(
+      ? `<div class="sub solid">${hintSpan(
           m.panelSubagentsRebuild(`${rebAtLeast ? "≥" : "≈"} ${fmtTokens(reb.cost, rebAtLeast)}`, rebShareText),
           rebAtLeast ? `${m.panelSubagentsRebuildHint} ${m.panelAtLeastNote}` : m.panelSubagentsRebuildHint
         )}</div>`
@@ -1377,7 +1387,7 @@ export function buildPanelHtml(
       adviceRow +
       gRows +
       (delegatedExpanded
-        ? listRows + more + idleLegend + `<div class="sub">${esc(m.panelSubagentsNote)}</div>`
+        ? listRows + more + `<div class="sub">${esc(m.panelSubagentsNote)}</div>`
         : "") +
       toggleRow;
   }
@@ -1455,7 +1465,10 @@ export function buildPanelHtml(
   .arow { display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; padding:2px 0; font-size:12px; }
   .arow b { min-width:64px; text-align:right; font-variant-numeric: tabular-nums; }
   .arow span { opacity:.75; overflow-wrap:anywhere; }
-  .arow .idle { margin-left:auto; white-space:nowrap; opacity:.7; font-variant-numeric: tabular-nums; }
+  /* muted by colour, not opacity — this cell carries a footnote (see HINT_CSS) */
+  .arow .idle { margin-left:auto; white-space:nowrap; opacity:1;
+                color:var(--vscode-descriptionForeground, var(--vscode-foreground));
+                font-variant-numeric: tabular-nums; }
   /* the toggle is a link people must be able to find: no .sub dimming on it */
   .toggle { opacity:1; padding-top:4px; }
   .toggle a { color: var(--vscode-textLink-foreground, var(--vscode-foreground)); text-decoration:none; }
@@ -1481,7 +1494,14 @@ export function buildPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.65; font-size:12px; }${HINT_CSS}${FOOT_CSS}
+  /* A .sub line that carries a footnote mutes itself by colour instead — see
+     HINT_CSS. The rest of the .sub lines keep the opacity: they hold no tip. */
+  .sub.solid { opacity:1; color:var(--vscode-descriptionForeground, var(--vscode-foreground)); }
+  .muted { opacity:.65; font-size:12px; }${HINT_CSS}
+  /* .arow span would dim this one back down; and the cell hangs on the right
+     edge, so its footnote has to open leftward or it opens off the page. */
+  .arow .idle .hint { opacity:1; }
+  .arow .idle .tip { left:auto; right:0; }${FOOT_CSS}
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>

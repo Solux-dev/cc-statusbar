@@ -236,25 +236,35 @@ function conciseError(err: unknown): string {
   return String(err || "unknown error");
 }
 
-/** A stated write count is kept as stated, except that a negative one is not a
- *  count at all — the same sanitising the Claude side does to its counters. It
- *  becomes `null`, NOT `0`: "not stated" and "stated as zero" are different
- *  answers and the panel says different things about them, so rewriting a
- *  corrupt field into a zero would put an invalid value in the one bucket that
- *  silences the panel's uncertainty note. A missing field stays `null` too. */
-function clampWrite(n: number | null): number | null {
-  if (n == null || n < 0) return null;
+/** A stated counter is kept as stated, but only if it can be a count at all:
+ *  finite, not negative, and inside the safe-integer range. Zero is a real
+ *  answer and is kept. Anything else becomes `null` — the same sanitising
+ *  `tokenCount` does on the Claude side, and for its two reasons: a negative
+ *  reaches the panel with a minus sign in front of it, and a fabricated 1e308
+ *  sums to Infinity two additions later, where the difference of two infinities
+ *  is NaN and every figure on the page turns to nonsense.
+ *
+ *  `null`, never `0`. For the five counters Codex always states that rejects
+ *  the whole breakdown, because one corrupt field leaves the others
+ *  unaccountable — the totals are meant to agree. For the optional write
+ *  counter it keeps the meaning the panel already relies on: "not stated" and
+ *  "stated as zero" are different answers and the page says different things
+ *  about them, so rewriting a corrupt field into a zero would drop an invalid
+ *  value into the one bucket that silences the panel's uncertainty note. */
+function counterOrNull(value: unknown): number | null {
+  const n = numberOrNull(value);
+  if (n == null || n < 0 || n > Number.MAX_SAFE_INTEGER) return null;
   return n;
 }
 
 function tokenBreakdown(payload: unknown): CodexTokenUsageBreakdownSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
-  const totalTokens = numberOrNull(p.totalTokens);
-  const inputTokens = numberOrNull(p.inputTokens);
-  const cachedInputTokens = numberOrNull(p.cachedInputTokens);
-  const outputTokens = numberOrNull(p.outputTokens);
-  const reasoningOutputTokens = numberOrNull(p.reasoningOutputTokens);
+  const totalTokens = counterOrNull(p.totalTokens);
+  const inputTokens = counterOrNull(p.inputTokens);
+  const cachedInputTokens = counterOrNull(p.cachedInputTokens);
+  const outputTokens = counterOrNull(p.outputTokens);
+  const reasoningOutputTokens = counterOrNull(p.reasoningOutputTokens);
   if (
     totalTokens == null ||
     inputTokens == null ||
@@ -272,18 +282,18 @@ function tokenBreakdown(payload: unknown): CodexTokenUsageBreakdownSnapshot | nu
     reasoningOutputTokens,
     // Absent in older payloads: recorded as "not stated", never as a reason to
     // reject the breakdown and never rewritten into a zero.
-    cacheWriteInputTokens: clampWrite(numberOrNull(p.cacheWriteInputTokens)),
+    cacheWriteInputTokens: counterOrNull(p.cacheWriteInputTokens),
   };
 }
 
 function tokenBreakdownFromRollout(payload: unknown): CodexTokenUsageBreakdownSnapshot | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
-  const totalTokens = numberOrNull(p.total_tokens);
-  const inputTokens = numberOrNull(p.input_tokens);
-  const cachedInputTokens = numberOrNull(p.cached_input_tokens);
-  const outputTokens = numberOrNull(p.output_tokens);
-  const reasoningOutputTokens = numberOrNull(p.reasoning_output_tokens);
+  const totalTokens = counterOrNull(p.total_tokens);
+  const inputTokens = counterOrNull(p.input_tokens);
+  const cachedInputTokens = counterOrNull(p.cached_input_tokens);
+  const outputTokens = counterOrNull(p.output_tokens);
+  const reasoningOutputTokens = counterOrNull(p.reasoning_output_tokens);
   if (
     totalTokens == null ||
     inputTokens == null ||
@@ -299,7 +309,7 @@ function tokenBreakdownFromRollout(payload: unknown): CodexTokenUsageBreakdownSn
     cachedInputTokens,
     outputTokens,
     reasoningOutputTokens,
-    cacheWriteInputTokens: clampWrite(numberOrNull(p.cache_write_input_tokens)),
+    cacheWriteInputTokens: counterOrNull(p.cache_write_input_tokens),
   };
 }
 
@@ -318,7 +328,7 @@ export function parseCodexTokenUsageNotification(message: unknown): CodexThreadT
   const total = tokenBreakdown(usage.total);
   const last = tokenBreakdown(usage.last);
   if (!total || !last) return null;
-  const modelContextWindow = numberOrNull(usage.modelContextWindow);
+  const modelContextWindow = counterOrNull(usage.modelContextWindow);
   return { threadId, turnId, tokenUsage: { total, last, modelContextWindow } };
 }
 
@@ -336,7 +346,7 @@ export function parseCodexRolloutTokenCount(message: unknown): CodexThreadTokenU
   const total = tokenBreakdownFromRollout(i.total_token_usage);
   const last = tokenBreakdownFromRollout(i.last_token_usage);
   if (!total || !last) return null;
-  const modelContextWindow = numberOrNull(i.model_context_window);
+  const modelContextWindow = counterOrNull(i.model_context_window);
   return { total, last, modelContextWindow };
 }
 

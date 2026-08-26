@@ -75,7 +75,12 @@ let extCtx: vscode.ExtensionContext | undefined;
 /** Is the panel's per-agent list open? Kept HERE, not in the page: the webview
  *  runs no scripts and its html is replaced on every tick, so a state that lived
  *  in the document would reset every few seconds. Remembered across restarts. */
+// Not persisted, and not carried across a close: a freshly opened panel always
+// starts with the list folded. The expanded list is a long page, and it was
+// following the reader into every other window and every other project — the
+// one place a remembered choice is more surprise than convenience.
 let delegatedExpanded = false;
+/** Read no more — kept only to erase what older builds wrote. */
 const DELEGATED_STATE_KEY = "panel.delegatedExpanded";
 let diagnosticsChannel: vscode.OutputChannel | undefined;
 const loggedDiagnostics = new Set<string>();
@@ -1201,7 +1206,8 @@ async function selectProviderMode(): Promise<void> {
 
 export function activate(context: vscode.ExtensionContext) {
   extCtx = context;
-  delegatedExpanded = context.globalState.get<boolean>(DELEGATED_STATE_KEY, false);
+  delegatedExpanded = false;
+  void context.globalState.update(DELEGATED_STATE_KEY, undefined); // drop what older builds stored
   diagnosticsChannel = vscode.window.createOutputChannel("CC Statusbar");
   codexTokenWatcher = new CodexTokenUsageWatcher(() => void tick());
   // hydrate persisted model-window limits so a restart doesn't refetch.
@@ -1300,6 +1306,11 @@ export function activate(context: vscode.ExtensionContext) {
       if (panel) {
         panel.reveal(panel.viewColumn ?? vscode.ViewColumn.Beside);
       } else {
+        // A panel that is being created starts folded, whatever was open in the
+        // one before it — including a list opened from the palette while no
+        // panel existed. `reveal` above is the other half of the rule: bringing
+        // the SAME panel forward leaves the reader's list exactly as they left it.
+        delegatedExpanded = false;
         panel = vscode.window.createWebviewPanel(
           "ccStatusbarUsage",
           messages(lang).panelTitle,
@@ -1321,9 +1332,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand(DELEGATED_TOGGLE_COMMAND, () => {
       delegatedExpanded = !delegatedExpanded;
-      // Remembered per user: a reader who opened the list once expects it open
-      // the next time, and the page itself cannot remember anything.
-      void extCtx?.globalState.update(DELEGATED_STATE_KEY, delegatedExpanded);
       void tick();
     }),
     vscode.commands.registerCommand("ccStatusbar.selectProvider", () => {

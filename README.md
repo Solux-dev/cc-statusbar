@@ -28,7 +28,7 @@ VSCodium-compatible editors, or run
 
 | English | Русский |
 |---------|---------|
-| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png?v=3) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png?v=3) |
+| ![Tooltip — English](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-en.png?v=4) | ![Tooltip — Russian](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-ru.png?v=4) |
 
 The collapsed bar lives at the bottom-right of the status bar; hover it for the
 full breakdown shown above. Want to keep it open? Click **“⤢ Open panel”** in
@@ -89,10 +89,10 @@ it (`⚠ new chat: …`) instead of guessing which tab you are looking at — VS
 exposes no API for that. It stays silent when both would run the same model, i.e.
 when nothing can go wrong.
 
-![Model, effort and an unanswered chat opened beside this one](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-model-en.png?v=1)
+![Model, effort and an unanswered chat opened beside this one](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-model-en.png?v=2)
 
 *The session is confirmed on Opus 5 at xhigh effort, while the chat just opened
-next to it is set to start on Fable 5 1M — named before a single token is spent
+next to it is set to start on Opus 1M — named before a single token is spent
 on it.*
 
 `effort` is the reasoning level (`low` / `medium` / `high` / `xhigh`): the one the
@@ -186,7 +186,7 @@ Subagents are spawned and given their models by the agent that created them —
 the Lead, or another agent when nesting goes deeper. Open the panel for a
 **Delegated work (subagents)** section:
 
-![The panel's delegated-work section](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=1)
+![The panel's delegated-work section](https://raw.githubusercontent.com/Solux-dev/cc-statusbar/master/media/screenshot-panel-en.png?v=2)
 
 Spend grouped by model+effort first (the answer to *"which models did it hand my
 work to, and what did that cost"*), and behind **“Show each agent ▾”** the

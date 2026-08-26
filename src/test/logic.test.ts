@@ -479,6 +479,58 @@ test("codexAppServer helpers: parses the latest local Codex rollout token_count"
   assert.equal(usage?.modelContextWindow, 20_000);
 });
 
+test("a Codex counter that cannot be a count is refused, never printed", () => {
+  // The Claude side has sanitised its counters for a while (`tokenCount`); the
+  // Codex parsers took whatever number the local file stated. A negative reached
+  // the panel with a minus sign in front of it, and a fabricated 1e308 would sum
+  // to Infinity two additions later, where the difference of two infinities is
+  // NaN and every figure on the page turns to nonsense.
+  const usage = (total: Record<string, number>) => ({
+    method: "thread/tokenUsage/updated",
+    params: {
+      threadId: "t", turnId: "u",
+      tokenUsage: {
+        total,
+        last: { totalTokens: 10, inputTokens: 6, cachedInputTokens: 2, outputTokens: 3, reasoningOutputTokens: 1 },
+        modelContextWindow: 10_000,
+      },
+    },
+  });
+  const good = { totalTokens: 1000, inputTokens: 700, cachedInputTokens: 200, outputTokens: 80, reasoningOutputTokens: 20 };
+  assert.equal(parseCodexTokenUsageNotification(usage(good))?.tokenUsage.total.inputTokens, 700);
+  assert.equal(parseCodexTokenUsageNotification(usage({ ...good, inputTokens: -700 })), null, "a negative input");
+  assert.equal(parseCodexTokenUsageNotification(usage({ ...good, cachedInputTokens: -1 })), null, "a negative cache read");
+  assert.equal(parseCodexTokenUsageNotification(usage({ ...good, totalTokens: 1e308 })), null, "a fabricated total");
+  // Zero is a real answer — a turn that read nothing from cache states zero, and
+  // rejecting it would blank a page that is perfectly correct.
+  const zeroed = { totalTokens: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+  assert.equal(parseCodexTokenUsageNotification(usage(zeroed))?.tokenUsage.total.totalTokens, 0);
+
+  // Same rule down the rollout path, where a corrupt LAST line must not erase a
+  // good earlier one: the reader falls back rather than showing nothing.
+  const line = (input: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: { input_tokens: input, cached_input_tokens: 100, output_tokens: 10, reasoning_output_tokens: 5, total_tokens: input + 15, ...extra },
+          last_token_usage: { input_tokens: 50, cached_input_tokens: 20, output_tokens: 5, reasoning_output_tokens: 1, total_tokens: 56 },
+          model_context_window: 10_000,
+        },
+      },
+    });
+  const fellBack = parseCodexRolloutTokenUsage([line(1000), line(-2000)].join("\n"));
+  assert.equal(fellBack?.total.inputTokens, 1000, "the last good reading stands");
+
+  // The optional write counter keeps its own meaning: a corrupt one is "not
+  // stated", which is NOT the same as "stated as zero" — the panel says
+  // different things about the two, and the breakdown itself still stands.
+  const withBadWrite = parseCodexRolloutTokenUsage(line(1000, { cache_write_input_tokens: -5 }));
+  assert.equal(withBadWrite?.total.inputTokens, 1000, "one bad optional field is not a reason to drop the turn");
+  assert.equal(withBadWrite?.total.cacheWriteInputTokens, null, "and it reads as unstated, not as zero");
+});
+
 test("Codex rollout identity: reads the latest turn model and effort", () => {
   const raw = [
     JSON.stringify({ type: "turn_context", payload: { turn_id: "t1", model: "gpt-5.5", effort: "medium" } }),
@@ -2963,8 +3015,46 @@ test("buildPanelHtml: the agent list folds away; the summary and the link never 
   assert.match(open, /implementer · Opus 5 · xhigh — Fix round R3/);
   assert.match(open, /после пауз 25% \(≈ 500k\)/, "the percentage AND the tokens: 25% of a small agent is not worth acting on");
   assert.match(open, /после пауз 0%/, "an agent that never waited says so");
-  assert.match(open, /после пауз — доля расхода самого агента/, "the cell explains itself once, under the list");
   assert.match(open, /Свернуть список агентов/);
+  // The definition of the column lives in the cell's own ⓘ. It is read once and
+  // never again, so as a paragraph under the list it was longer than every row
+  // it explained; the guidance sentence about who picks the model is the one
+  // thing that stays as visible text, because it is acted on, not just read.
+  assert.match(
+    open,
+    /class="idle"><span class="hint"[^>]*>после пауз 25% \(≈ 500k\) ⓘ<span class="tip">после пауз — доля расхода самого агента/,
+    "the legend hangs off the cell it defines"
+  );
+  assert.ok(
+    !/<div class="sub">после пауз — доля/.test(open),
+    "and no longer stands as a wall of text under the list"
+  );
+  assert.match(open, /<div class="sub">Модель выбирает тот, кто запустил агента/);
+});
+
+test("a footnote never hangs under an element that dims itself with opacity", () => {
+  // Opacity multiplies through the whole subtree, so a muted container took its
+  // ⓘ panel down with it and the page read straight through the box — worst on
+  // the `.sub` line, dimmed to .6 before the hint dimmed it again. Containers
+  // that carry a footnote mute themselves with colour instead. Asserted on the
+  // stylesheet because that is where the rule can silently come undone.
+  const reb = REB({ tokens: 800_000, tokens5m: 800_000, cacheWrite: 5_000_000, streams: 1 });
+  const html = buildPanelHtml(
+    IDLE_TOTALS, W, QUOTA_OFF, 1000, "en",
+    undefined, undefined, undefined, [IDLE_AGENT], 1_000_000, { subagents: reb }, true
+  );
+  const style = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  assert.ok(!/\.hint \{[^}]*opacity:\s*\.\d/.test(style), "the hint itself must not dim");
+  assert.ok(/\.arow \.idle \{[^}]*opacity:1/.test(style), "nor the agent's idle cell");
+  assert.ok(/\.sub\.solid \{[^}]*opacity:1/.test(style), "nor a .sub line that carries one");
+  assert.match(html, /<div class="sub solid">/, "and that line asks for the undimmed variant");
+  // The Codex page shares the helper, so it shares the rule.
+  const codex = buildCodexPanelHtml(
+    { state: "ok", fiveH: { pct: 12, resetAt: 2000 }, sevenD: { pct: 4, resetAt: 90_000 } },
+    1000,
+    "en"
+  );
+  assert.ok(/\.row \.hint \{[^}]*opacity:1/.test(codex), "on both pages");
 });
 
 test("buildPanelHtml (en): the same list, the same two figures, in English", () => {
@@ -4383,12 +4473,13 @@ test("a reload share below 1% with unjudged gaps states the tokens, never a ceil
   const ru = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru", undefined, undefined, undefined, subs, 0, { subagents: reb }, false);
   assert.match(ru, /из них ≥ 1M ушло на повторную загрузку/);
   assert.ok(!/&lt;1%/.test(ru));
-  // The per-agent cell is the same shape and the same rule, and the legend that
-  // sits under it now describes it — it used to explain three shapes (`0%`, a
-  // dash, a percentage) and leave this fourth one unexplained. The legend lives
-  // inside the fold, so this half is asserted with the list open.
+  // The per-agent cell is the same shape and the same rule, and the legend in
+  // the cell's own ⓘ describes it — it used to explain three shapes (`0%`, a
+  // dash, a percentage) and leave this fourth one unexplained. The cell lives
+  // inside the fold, so this half is asserted with the list open. The ⓘ right
+  // after the tokens is what pins "no percentage beside them".
   const open = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "en", undefined, undefined, undefined, subs, 0, { subagents: reb }, true);
-  assert.match(open, /after pauses ≥ 1M<\/span>/);
+  assert.match(open, /after pauses ≥ 1M ⓘ/);
   assert.match(open, /a token figure with no percentage beside it/);
   const openRu = buildPanelHtml(totals, W, QUOTA_OFF, 1000, "ru", undefined, undefined, undefined, subs, 0, { subagents: reb }, true);
   assert.match(openRu, /цифра токенов без процента рядом/);

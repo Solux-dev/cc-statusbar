@@ -3,7 +3,7 @@
 All notable changes to **cc-statusbar** are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.0.26] — 2026-08-26
 
 ### Added
 
@@ -41,6 +41,21 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A Codex counter that cannot be a count is refused instead of printed.** The
+  local Codex files were read as stated: a negative `input_tokens` reached the
+  panel with a minus sign in front of it, and a fabricated 1e308 would sum to
+  Infinity two additions later, where the difference of two infinities is NaN and
+  every figure on the page turns to nonsense. The five counters Codex always
+  states are now sanitised exactly as the Claude side has been (`tokenCount`);
+  one corrupt field rejects that reading and the last good one stands, rather
+  than the page showing nothing. The optional cache-write counter keeps its own
+  meaning — a corrupt one reads as *not stated*, which the panel says different
+  things about than *stated as zero*.
+- **Footnotes were see-through.** Every ⓘ panel in both pages was drawn inside
+  text that dimmed itself with `opacity`, and opacity multiplies down the whole
+  subtree — so the page read straight through the footnote, worst on the lines
+  dimmed twice over. Muted text is muted by colour now; the footnote sits on a
+  solid background. A test pins the rule so it cannot come undone quietly.
 - **The Codex panel published a direction that the missing counter decides.**
   With `100k` of input, `10k` of it cached and no cache-write count stated, the
   panel said “Cache saved ≈ 9k (~1.1× lower)” — while the ⓘ beside it said the
@@ -292,17 +307,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   the page: with a dozen agents open, `Details` used to sit below the fold and
   was never seen.
 - **The agent list folds away.** It opens and closes from a link at the foot of
-  the section (`Show each agent ▾` / RU «Показать по агентам ▾»), and the choice
-  is remembered. What stays visible either way: how much went to agents, to
-  which models, and — when it clears the threshold that line has always had —
-  what waiting cost them. There is also a command for it —
+  the section (`Show each agent ▾` / RU «Показать по агентам ▾»). A panel always
+  opens with the list folded — the choice is not carried into the next panel, or
+  into another window, or into another project, which is where a remembered
+  expansion turned into a surprise. Reopening the same panel from the status bar
+  leaves it exactly as you left it. What stays visible either way: how much went
+  to agents, to which models, and — when it clears the threshold that line has
+  always had — what waiting cost them. There is also a command for it —
   *“Claude/Codex Statusbar: Show/hide the agent list in the panel”*. The panel
   still runs **no scripts**: the link runs that one command, and the state lives
   in the extension, because the page itself is re-rendered every few seconds and
   cannot remember anything.
+- **The column that explains itself does it in a hover now.** `after pauses` used
+  to be defined by a paragraph under the agent list — six lines describing four
+  shapes a cell can take, read once and then re-read on every visit. The
+  definition moved into the cell's own ⓘ, word for word. The one paragraph that
+  stays as plain text is the one that is acted on rather than read: who chooses
+  the model each subagent runs on.
 - Marketplace keywords now include `subagents`, `cursor`, `windsurf` and
   `vscodium` — the extension already works in those editors and in any VS Code
   fork with Claude Code or Codex installed.
+- The marketplace description now leads with what the extension is for rather
+  than what it reads, and names the forks it runs in. The listing page is the
+  only surface most people ever compare on, and it was describing mechanics.
+- Fresh screenshots on the README: both hovers, the redesigned panel with the
+  agent list open, and the new-chat warning. The old ones predate the panel
+  redesign and still showed labels this release no longer uses.
 
 ## [1.0.25] — 2026-08-24
 
