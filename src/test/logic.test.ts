@@ -634,7 +634,10 @@ test("buildCodexQuotaView/buildCodexPanelHtml: Codex cache appears when token us
   assert.match(html, /Токен-эквивалент с кэшем/);
   assert.match(html, /≈ 975 ток/);
   assert.match(html, /≈ 1\.2k ток/);
-  assert.match(html, /≈ 225 ток/);
+  // The saving is "≤", not "≈": this payload states no cache-write count, so
+  // the 750 of ordinary input could hold one. At the far end the saving is 38,
+  // not 225 — 225 is its ceiling, and a ceiling rounds up, never down.
+  assert.match(html, /≤ 225 ток/);
   assert.match(html, /Ввод из кэша/);
   assert.match(html, /<b>25%<\/b>/);
 });
@@ -766,8 +769,9 @@ test("buildView (ru): ok state shows tariff-only bar (dots + 5ч/7д), эфф in
   assert.match(v.text, /🟢 5ч 24%/);
   assert.match(v.text, /7д 41%/);
   assert.ok(!/эфф/.test(v.text), "effective must NOT be in collapsed bar");
-  // cost-first headline: token-equivalent with-cache · without-cache · ×lower (4.6×)
-  assert.match(v.tooltip, /токен-эквивалент с кэшем ≈ \*\*2\.5M\*\* · без кэша ≈ \*\*11\.2M\*\* \(в ~4\.6× меньше\)/);
+  // cost-first headline. Round 19: the comparison word describes the figure it
+  // FOLLOWS — the without-cache one — the same subject both panels use.
+  assert.match(v.tooltip, /токен-эквивалент с кэшем ≈ \*\*2\.5M\*\* · без кэша ≈ \*\*11\.2M\*\* \(в ~4\.6× больше\)/);
   // muted technical breakdown line still present
   assert.match(v.tooltip, /обычные ввод\+вывод 200k · кэш: чтение 10M \/ запись 1M/);
 });
@@ -782,7 +786,7 @@ test("buildView (en): ok state, english bar + tooltip", () => {
   }, now, "en");
   assert.match(v.text, /🟢 5h 24%/);
   assert.match(v.text, /7d 41%/);
-  assert.match(v.tooltip, /token-equivalent with cache ≈ \*\*2\.5M\*\* · without cache ≈ \*\*11\.2M\*\* \(~4\.6× lower\)/);
+  assert.match(v.tooltip, /token-equivalent with cache ≈ \*\*2\.5M\*\* · without cache ≈ \*\*11\.2M\*\* \(~4\.6× more\)/);
   assert.match(v.tooltip, /ordinary in\+out 200k · cache: read 10M \/ write 1M/);
   assert.match(v.tooltip, /Subscription quota/);
   assert.match(v.tooltip, /on track/);
@@ -2787,8 +2791,13 @@ for (const c of CLAUDE_ORDER) {
 }
 
 const CODEX_ORDER = [
-  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", compare: "without cache ≈ 105k tok — ~3.2× more", hidden: "Cache saved", value: "≈ 33k tok" },
-  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", compare: "без кэша было бы ≈ 105k ток — в ~3.2× больше", hidden: "Сэкономлено кэшем", value: "≈ 33k ток" },
+  // No `~3.2×` here on purpose. This payload states no cache-write count, and
+  // the 20k of ordinary input left could hold one: the ratio is 3.2× if it held
+  // none and 2.8× if it held all of it. A multiplier has no room for a marker,
+  // so it is dropped rather than printed at the flattering end. The two absolute
+  // figures — the point of the line — are unaffected.
+  { lang: "en" as const, quota: "Subscription quota", context: "context: 14%", cache: ">Cache<", cost: "Token-equivalent with cache", details: ">Details<", compare: "without cache ≈ 105k tok", hidden: "Cache saved", value: "≈ 33k tok" },
+  { lang: "ru" as const, quota: "Тариф", context: "контекст: 14%", cache: ">Кэш<", cost: "Токен-эквивалент с кэшем", details: ">Детали<", compare: "без кэша было бы ≈ 105k ток", hidden: "Сэкономлено кэшем", value: "≈ 33k ток" },
 ];
 
 for (const c of CODEX_ORDER) {
@@ -3042,10 +3051,10 @@ test("buildView: the hover says the same thing, and never the reverse", () => {
   const en = buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en").tooltip;
   // The hover names no cause at all: it has no room for the three-way
   // explanation the panel's ⓘ carries, and naming the wrong one is worse.
-  assert.match(en, /without cache ≈ \*\*101k\*\* \(~2× higher so far\)/);
+  assert.match(en, /without cache ≈ \*\*101k\*\* \(~2× less, so far\)/);
   assert.ok(!/has not earned back/.test(en));
   const ru = buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "ru").tooltip;
-  assert.match(ru, /без кэша ≈ \*\*101k\*\* \(пока в ~2× больше\)/);
+  assert.match(ru, /без кэша ≈ \*\*101k\*\* \(пока в ~2× меньше\)/);
 });
 
 test("buildCodexPanelHtml: a cacheReadWeight above 1 inverts Codex too — and is stated honestly", () => {
@@ -3515,7 +3524,7 @@ test("the warm-up footnote does not promise a payback the settings can forbid", 
   assert.ok(!/and earns that back on the reads that follow/.test(en));
   // …and the rule itself is about the PREMIUM, not about raw token counts: a
   // session can write more than it reads and still show the smaller figure.
-  assert.match(en, /While the premium those writes pay is bigger than what the reads save/);
+  assert.match(en, /While the premium those writes pay is bigger than anything read back from the cache has saved/);
   assert.ok(!/written more than it has read back/.test(en));
 });
 
@@ -3710,7 +3719,7 @@ test("when BOTH sides add, neither single-cause sentence is told", () => {
   assert.equal(effectiveTokens(totals, readsCost), 401_000, "both contributions are +100k");
   const en = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "en");
   assert.match(en, /Both sides of the cache add to this figure here/);
-  assert.ok(!/While the premium those writes pay is bigger than what the reads save/.test(en));
+  assert.ok(!/While the premium those writes pay is bigger than anything read back from the cache has saved/.test(en));
   assert.ok(!/Cached input is priced above fresh input here/.test(en));
   const ru = buildPanelHtml(totals, readsCost, QUOTA_OFF, 1000, "ru");
   assert.match(ru, /обе стороны кэша только увеличивают это число/);
@@ -3939,7 +3948,7 @@ test("a write count Codex never stated is not read as a zero", () => {
   const en = buildCodexPanelHtml(quota, now, "en", silent);
   assert.match(en, /write n\/a/);
   assert.match(en, /stated no cache-write count for this session/);
-  assert.match(en, /the figure above is a floor/);
+  assert.match(en, /the token-equivalent is a floor/);
   assert.ok(!/were written to cache/.test(en), "…the priced sentence, which would claim a measurement");
   assert.match(buildCodexPanelHtml(quota, now, "ru", silent), /Счётчик записи в кэш Codex для этой сессии не сообщил/);
 
@@ -4037,7 +4046,10 @@ test("the 'so far' is dropped wherever no weight can narrow the gap", () => {
     usage: {
       totalTokens: 105_000, lastTokens: 105_000,
       inputTokens: 100_000, cachedInputTokens: 40_000,
-      outputTokens: 5000, reasoningOutputTokens: 0,
+      // Stated, so the multiplier this test is about actually gets printed:
+      // with the count missing the 60k of ordinary input could hold a write, and
+      // the ratio moves 1.4× → 1.5× across that interval, so it is dropped.
+      outputTokens: 5000, reasoningOutputTokens: 0, cacheWriteInputTokens: 0,
     },
   };
   const locked = buildCodexPanelHtml(quota, now, "en", codex);
@@ -4077,13 +4089,120 @@ test("the 'so far' is dropped wherever no weight can narrow the gap", () => {
   // told the same reader two different things about the same two numbers.
   const locked2 = { cacheRead: 2, cacheWrite: 1.25 };
   const hoverLocked = buildView(WARMUP_TOTALS, locked2, QUOTA_OFF, 1000, "en").tooltip;
-  assert.match(hoverLocked, /× higher\)/);
-  assert.ok(!/higher so far/.test(hoverLocked), "the hover must drop it wherever the panel does");
+  assert.match(hoverLocked, /× less\)/);
+  assert.ok(!/less, so far/.test(hoverLocked), "the hover must drop it wherever the panel does");
   assert.ok(!/пока в ~/.test(buildView(WARMUP_TOTALS, locked2, QUOTA_OFF, 1000, "ru").tooltip));
   // At the default weights a read at 0.1 can still narrow it, so the hedge is
   // honest and stays — the same hover, the same numbers, a different setting.
-  assert.match(buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en").tooltip, /higher so far/);
+  assert.match(buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "en").tooltip, /less, so far/);
   assert.match(buildView(WARMUP_TOTALS, W, QUOTA_OFF, 1000, "ru").tooltip, /пока в ~/);
+});
+
+test("no direction is published where an unstated Codex write count decides it", () => {
+  // Round 19. `100k input / 10k cached / write n/a` printed "Cache saved 9k
+  // (~1.1× lower)" — while the ⓘ beside it said the 91k was only a floor. If
+  // the unstated 90k had in fact been written, the figure is 113.5k and the
+  // cache COST 13.5k. The panel was publishing a coin toss as a fact.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const codex = (usage: Record<string, unknown>) => ({
+    source: "stdio" as const,
+    weights: { cacheRead: 0.1, cacheWrite: 1.25 },
+    usage: { totalTokens: 0, lastTokens: 0, reasoningOutputTokens: 0, ...usage } as never,
+  });
+  // noCache (100k) falls between the two ends (91k … 113.5k): unknowable.
+  const flips = codex({ inputTokens: 100_000, cachedInputTokens: 10_000, outputTokens: 0 });
+  const en = buildCodexPanelHtml(quota, now, "en", flips);
+  assert.match(en, /the token-equivalent is ≈ 91k; if all of it was, ≈ 113\.5k/);
+  assert.match(en, /which of the two is larger cannot be said/);
+  assert.ok(!/Cache saved/.test(en), "a saving is a direction, and the direction is what is unknown");
+  assert.ok(!/× more|× lower/.test(en), "…and so is a multiplier");
+  const ru = buildCodexPanelHtml(quota, now, "ru", flips);
+  assert.match(ru, /если записано всё — ≈ 113\.5k/);
+  assert.ok(!/Кэш сэкономил|× меньше|× больше/.test(ru));
+  // The hover has no ⓘ to carry the caveat, so the line itself carries it.
+  assert.match(buildCodexQuotaView(quota, now, "en", flips).tooltip, /which is larger cannot be said/);
+  assert.match(buildCodexQuotaView(quota, now, "ru", flips).tooltip, /какое больше — сказать нельзя/);
+
+  // Where the direction holds at BOTH ends, nothing changes: 99k cached leaves
+  // 1k that could be a write, and 10.9k … 11.15k is under 100k either way.
+  const holds = buildCodexPanelHtml(
+    quota, now, "en",
+    codex({ inputTokens: 100_000, cachedInputTokens: 99_000, outputTokens: 0 })
+  );
+  assert.match(holds, /Cache saved/);
+  assert.match(holds, /the token-equivalent is a floor/);
+  // And a STATED count leaves no interval to be uncertain about.
+  const stated = buildCodexPanelHtml(
+    quota, now, "en",
+    codex({ inputTokens: 100_000, cachedInputTokens: 10_000, outputTokens: 0, cacheWriteInputTokens: 0 })
+  );
+  assert.match(stated, /Cache saved: ≈ 9k/);
+  assert.ok(!/cannot be said/.test(stated));
+});
+
+test("the two ends of the unstated-write interval are named by meaning, not by size", () => {
+  // Round 19, second channel — a defect the FIRST half of round 19 introduced.
+  // The ⓘ reads its arguments as "if none was written" then "if all was", but
+  // they were handed over as min/max. Below a write weight of 1 the "all
+  // written" end is the SMALLER one, so both endpoints landed on the wrong
+  // hypothesis and the closing sentence ("the figure above is the none-written
+  // end") then contradicted the figure printed above it.
+  const now = 1000;
+  const quota = { state: "ok" as const, fiveH: null, sevenD: null };
+  const below = {
+    source: "stdio" as const,
+    weights: { cacheRead: 2, cacheWrite: 0.5 },
+    usage: {
+      totalTokens: 105_000, lastTokens: 105_000,
+      inputTokens: 100_000, cachedInputTokens: 10_000,
+      outputTokens: 5000, reasoningOutputTokens: 0,
+    } as never,
+  };
+  // none → 90k + 5k + 10k×2 = 115k · all → 115k − 90k×0.5 = 70k · noCache 105k,
+  // which is between them, so the direction is unknowable and the ⓘ fires.
+  const en = buildCodexPanelHtml(quota, now, "en", below);
+  assert.match(en, /≈ 115k tok/, "the headline is the none-written end");
+  assert.match(en, /was written to cache, the token-equivalent is ≈ 115k; if all of it was, ≈ 70k/);
+  const ru = buildCodexPanelHtml(quota, now, "ru", below);
+  assert.match(ru, /токен-эквивалент ≈ 115k; если записано всё — ≈ 70k/);
+  // Above 1 the ends come out in the other order, and the same sentence still
+  // maps them the same way round. (`cacheRead` back at its default, so the
+  // without-cache figure still lands between them and the ⓘ still fires.)
+  const above = {
+    ...below,
+    weights: { cacheRead: 0.1, cacheWrite: 1.5 },
+    usage: { ...(below.usage as object), outputTokens: 0 } as never,
+  };
+  // none → 90k + 10k×0.1 = 91k · all → 91k + 90k×0.5 = 136k · noCache 100k.
+  assert.match(
+    buildCodexPanelHtml(quota, now, "en", above),
+    /was written to cache, the token-equivalent is ≈ 91k; if all of it was, ≈ 136k/
+  );
+});
+
+test("the footnotes drop their own hedge wherever the line above them drops it", () => {
+  // Round 19. Round 18 gated the four visible cost lines and left the ⓘ under
+  // them promising "so far" / "yet" — a footnote is a statement too. Both
+  // hints that carry one are gated on the same condition now.
+  const locked = { cacheRead: 1, cacheWrite: 1.25 };
+  // Read weight exactly 1 (readDelta 0) with a write premium: the warm-up
+  // branch, and nothing below 1 to earn it back.
+  const warmup = {
+    input: 0, output: 0, work: 0,
+    cacheRead: 10_000, cacheWrite: 100_000,
+    cacheWrite1h: 0, cacheWrite5m: 0, cacheWriteUnknown: 100_000,
+  };
+  const en = buildPanelHtml(warmup, locked, QUOTA_OFF, 1000, "en");
+  assert.match(en, /The cache has not earned back what it cost\./);
+  assert.ok(!/earned back what it cost yet/.test(en), "nothing below 1 can earn it back");
+  assert.match(en, /no later read can earn it back/);
+  const ru = buildPanelHtml(warmup, locked, QUOTA_OFF, 1000, "ru");
+  assert.ok(!/Кэш пока не вернул/.test(ru));
+  assert.match(ru, /разрыв может только вырасти/);
+  // At the default weights the promise is honest and stays.
+  assert.match(buildPanelHtml(warmup, W, QUOTA_OFF, 1000, "en"), /earned back what it cost yet/);
+  assert.match(buildPanelHtml(warmup, W, QUOTA_OFF, 1000, "ru"), /Кэш пока не вернул/);
 });
 
 test("an unstated Codex write count bounds the figure the way the WEIGHT says, not always downward", () => {
@@ -4103,18 +4222,22 @@ test("an unstated Codex write count bounds the figure the way the WEIGHT says, n
   const at = (cacheWrite: number, lang: "en" | "ru") =>
     buildCodexPanelHtml(quota, now, lang, { source: "stdio" as const, weights: { cacheRead: 0.1, cacheWrite }, usage });
 
-  assert.match(at(1.25, "en"), /the figure above is a floor: your `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
-  assert.match(at(1.25, "ru"), /число выше — нижняя граница: ваш параметр `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
+  // Round 19: the referent is NAMED. This sentence follows a saving on one
+  // branch and the token-equivalent on another, and those two are bounded in
+  // opposite directions — "the figure above" pointed at the wrong one half the
+  // time.
+  assert.match(at(1.25, "en"), /the token-equivalent is a floor: your `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
+  assert.match(at(1.25, "ru"), /токен-эквивалент — нижняя граница: ваш параметр `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
 
   const ceiling = at(0.5, "en");
-  assert.match(ceiling, /the figure above is a ceiling: your `ccStatusbar\.cacheWriteWeight` \(0\.5\)/);
+  assert.match(ceiling, /the token-equivalent is a ceiling: your `ccStatusbar\.cacheWriteWeight` \(0\.5\)/);
   assert.ok(!/is a floor/.test(ceiling), "a write priced below fresh input makes the same figure a ceiling");
-  assert.match(at(0.5, "ru"), /число выше — верхняя граница/);
+  assert.match(at(0.5, "ru"), /токен-эквивалент — верхняя граница/);
 
   const exact = at(1, "en");
-  assert.match(exact, /the figure above does not move/);
+  assert.match(exact, /the token-equivalent does not move/);
   assert.ok(!/floor|ceiling/.test(exact), "at 1 a write is priced as ordinary input, so there is no bound");
-  assert.match(at(1, "ru"), /число выше не изменится/);
+  assert.match(at(1, "ru"), /токен-эквивалент не изменится/);
 });
 
 test("a negative Codex write count is not a count, and never becomes a stated zero", () => {

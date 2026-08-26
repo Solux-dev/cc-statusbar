@@ -171,16 +171,16 @@ on 26 August 2026 (developers.openai.com/api/docs/guides/prompt-caching):
   visible input tokens for earlier models, some of which may cache shorter
   prefixes. Hidden system content does not count toward the minimum.
 - **GPT-5.6 and later** use `prompt_cache_options.ttl`, whose only supported
-  value is `30m` — also the default. A cached prefix stays eligible for 30
-  minutes after its most recent write or reuse.
-- **Earlier models** use `prompt_cache_retention`, with two settings:
-  `in_memory` (entries typically live 5–10 minutes of inactivity, up to an hour)
-  and `24h` (typically around 30 minutes, up to 24 hours).
-- **Extended retention** is listed for `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`,
-  `gpt-5.2`, `gpt-5.1-codex-max`, `gpt-5.1`, `gpt-5.1-codex`,
-  `gpt-5.1-codex-mini`, `gpt-5.1-chat-latest`, `gpt-5`, `gpt-5-codex` and
-  `gpt-4.1` — so `gpt-5.5` and `gpt-5.5-pro` are NOT restricted to `24h`, which
-  the earlier draft claimed.
+  value is `30m` — also the default. A cached prefix "remains eligible for reuse
+  for 30 minutes after its most recent write or reuse, though OpenAI may retain
+  it longer": a minimum, not an expiry you can count on to the second.
+- **`gpt-5.5` and `gpt-5.5-pro`** support `"24h" only` — one value, not a
+  choice.
+- **The other earlier models** (`gpt-5.4`, `gpt-5.2`, `gpt-5.1` and its codex
+  variants, `gpt-5`, `gpt-5-codex`, `gpt-4.1`) support both `in_memory`
+  (typically 5–10 minutes of inactivity, up to an hour) and `24h` (typically
+  around 30 minutes, up to 24 hours). For those, the default follows the
+  organisation's data-retention policy.
 
 These are somebody else's numbers and they move. Anything we ever print from
 them must be re-read at the source first, and the extension still prints none

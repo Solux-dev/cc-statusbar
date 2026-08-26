@@ -15,11 +15,14 @@ import {
   IdleRebuild,
   CacheTier,
   CostDirection,
+  BoundDirection,
   CACHE_WRITE_WEIGHT_1H,
   CACHE_WRITE_WEIGHT_5M,
   effectiveTokens,
   costDirection,
   writeBound,
+  invertBound,
+  boundMark,
   rebuildCost,
   fmtTokens,
   fmtMult,
@@ -218,12 +221,20 @@ export function costCauseHint(
   // So it says exactly that — there is one, and it is smaller than what is
   // printed. Ordering matters: a cause named over an invisible difference is
   // the same defect whether the cause is one side or both.
-  if (invisible) return m.panelCostTooSmallHint;
+  // Two of these five carry a hedge of their own — "so far", "yet" — and they
+  // hang on exactly what the visible compare line hangs on. A footnote is a
+  // statement too, and round 18 fixed the same promise one line up.
+  const canReverse = cacheCanReverse(weights, [
+    CACHE_WRITE_WEIGHT_1H,
+    CACHE_WRITE_WEIGHT_5M,
+    weights.cacheWrite,
+  ]);
+  if (invisible) return m.panelCostTooSmallHint(canReverse);
   // Both sides adding is its OWN state, not a contest between them: "the write
   // premium is bigger than what the reads save" is false when the reads save
   // nothing, and it stays false whichever side happens to be larger.
   if (readDelta > 0 && writeDelta > 0) return m.panelCostBothHint;
-  return writeDelta >= readDelta ? m.panelCostWarmupHint : m.panelCostWeightHint;
+  return writeDelta >= readDelta ? m.panelCostWarmupHint(canReverse) : m.panelCostWeightHint;
 }
 
 /** The one command a panel link may run: it flips the agent list open/closed.
@@ -536,6 +547,24 @@ function codexEconomy(
    *  priced a number the clamp cut down, and must not print a claim at all when
    *  the provider stated none. */
   writeStated: number | null;
+  /** False when an UNSTATED write count leaves the comparison unsettled. With
+   *  no count, the true figure lies somewhere between "none of the remaining
+   *  input was written" and "all of it was"; where the without-cache figure
+   *  falls strictly inside that interval, whether the cache saved or cost is
+   *  not knowable, and no direction, multiplier or saving may be published. */
+  directionCertain: boolean;
+  /** The two ends of that interval, named by MEANING rather than by size:
+   *  `effectiveNone` is what the figure is if nothing outside the cached reads
+   *  was written, `effectiveAll` if all of it was. Which of the two is the
+   *  larger flips with the write weight, so a min/max pair cannot be handed to a
+   *  sentence that says "if none … if all". Equal when the count IS stated. */
+  effectiveNone: number;
+  effectiveAll: number;
+  /** The bound on the SAVING, which is the opposite of the token-equivalent's:
+   *  `saved = noCache − effective` and `noCache` is exact, so a figure that can
+   *  only be higher leaves a saving that can only be smaller. "exact" whenever
+   *  the interval cannot change what the saving prints. */
+  savedBound: BoundDirection;
 } | null {
   if (!details.usage) return null;
   const cacheReadWeight = details.weights?.cacheRead ?? 0.1;
@@ -562,11 +591,48 @@ function codexEconomy(
   const effective = work + cachedInput * cacheReadWeight + writeInput * cacheWriteWeight;
   const noCache = details.usage.inputTokens + output;
   const saved = Math.max(0, noCache - effective);
+  // How far the figure could move if the unstated count turns out to be real.
+  // Only the write bucket is unknown, and it can hold anything from nothing to
+  // the whole of what the reads left: `effective(w) = base + w × (weight − 1)`,
+  // monotonic in `w`, so the two ends of the interval ARE the two extremes.
+  // With a stated count there is no interval and both ends are the figure.
+  // `effective` IS the "none of it was written" end whenever the count is
+  // unstated, because `writeInput` falls back to 0 there.
+  const effectiveNone = effective;
+  const effectiveAll =
+    writeStated == null ? effective + afterCached * (cacheWriteWeight - 1) : effective;
+  // …but only the COMPARISON may sort them by size: below a write weight of 1
+  // the "all written" end is the smaller one, and a sentence that says "if none
+  // … if all" has to be handed them the other way round.
+  const lo = Math.min(effectiveNone, effectiveAll);
+  const hi = Math.max(effectiveNone, effectiveAll);
+  // The direction survives only if the without-cache figure does NOT fall
+  // strictly inside the interval. If it does, one end says the cache saved and
+  // the other says it cost — and publishing either is a coin toss printed as a
+  // fact. The tolerance is the same one an arithmetic zero needs elsewhere.
+  const directionCertain = !(noCache > lo + ZERO_TOLERANCE && noCache < hi - ZERO_TOLERANCE);
+  const here = costDirection(effective, noCache);
+  // A derived figure is publishable while the unstated count cannot change what
+  // it PRINTS — the same test the panel already applies to two token figures
+  // that round to the same text. Where the ends print differently, the saving
+  // carries the bound it actually has (the opposite of the token-equivalent's,
+  // because `noCache` is exact) and the multiplier is dropped: a ratio has no
+  // room for a marker, and an unmarked one is the overstatement itself.
+  const canMove = writeStated == null && afterCached > 0;
+  const atOtherEnd = canMove ? costDirection(effectiveAll, noCache) : here;
+  const multStable = !canMove || (atOtherEnd.dir === here.dir && atOtherEnd.mult === here.mult);
+  const savedStable =
+    !canMove || fmtTokens(Math.max(0, noCache - effectiveAll)) === fmtTokens(saved);
   return {
     effective,
     noCache,
     saved,
-    ...costDirection(effective, noCache),
+    directionCertain,
+    effectiveNone,
+    effectiveAll,
+    savedBound: savedStable ? ("exact" as BoundDirection) : invertBound(writeBound(cacheWriteWeight)),
+    ...here,
+    mult: multStable ? here.mult : null,
     work,
     cachedInput,
     ordinaryInput: freshInput,
@@ -595,6 +661,14 @@ function codexCanReverse(details: CodexQuotaDetails): boolean {
 function codexUsageCompact(details: CodexQuotaDetails, m: Messages): string {
   const economy = codexEconomy(details);
   if (!economy) return m.codexUsageWaitingCompact;
+  // No direction, no multiplier, no "so far" where an unstated write count puts
+  // the two figures on either side of each other. The hover has no ⓘ to carry a
+  // caveat, so the caveat has to be the line itself.
+  if (!economy.directionCertain) {
+    return m.codexCostUnknownCompact(fmtTokens(economy.effective), fmtTokens(economy.noCache));
+  }
+  // …and `economy.mult` is already null where an unstated count could change
+  // what it prints, so the hover and the panel drop it on the same tick.
   return m.codexCostCompact(
     fmtTokens(economy.effective),
     fmtTokens(economy.noCache),
@@ -1435,10 +1509,31 @@ export function buildCodexPanelHtml(
     // show is the defect rounds 10 and 12 closed on the Claude panel.
     const readDelta = economy.cachedInput * (readW - 1);
     const writeDelta = economy.writeInput * (writeW - 1);
-    const costHint =
-      economy.noCache > economy.effective
-        ? `${m.codexPanelSavedLabel}: ≈ ${fmtTokens(economy.saved)} ${m.tok}` +
-          `${economy.mult && economy.dir === "more" ? ` ${m.codexLowerMult(economy.mult)}` : ""}.${writeNote} ` +
+    const savedBound = economy.savedBound;
+    const costHint = !economy.directionCertain
+      ? // Ahead of every other branch, including the cause chain: each of those
+        // names which figure is larger or why, and that is the one thing an
+        // unstated write count makes unknowable here. It also carries the
+        // missing counter itself, so `writeNote` is NOT appended — it would say
+        // the same sentence a second time, more weakly.
+        `${m.codexPanelDirectionUnknownHint(
+          fmtTokens(economy.effectiveNone),
+          fmtTokens(economy.effectiveAll),
+          fmtTokens(economy.noCache)
+        )} ${m.codexPanelTokenCostNote}`
+      : economy.noCache > economy.effective
+        ? // The saving is `noCache − effective`, and `noCache` is exact — so it
+          // carries the OPPOSITE bound to the figure it is subtracted from: a
+          // token-equivalent that can only be higher leaves a saving that can
+          // only be smaller. The multiplier is that same ratio and moves with
+          // it, so it is dropped rather than printed unmarked; the ⓘ that
+          // follows says which way and why.
+          `${m.codexPanelSavedLabel}: ${boundMark(savedBound)} ${fmtTokens(economy.saved, savedBound)} ${m.tok}` +
+          `${
+            savedBound === "exact" && economy.mult && economy.dir === "more"
+              ? ` ${m.codexLowerMult(economy.mult)}`
+              : ""
+          }.${writeNote} ` +
           m.codexPanelTokenCostNote
         : `${
             // Codex's own sentence, not Claude's: it states that nothing was
@@ -1450,11 +1545,11 @@ export function buildCodexPanelHtml(
               : readDelta + writeDelta <= ZERO_TOLERANCE
               ? m.panelCostEvenHint
               : fmtTokens(economy.effective) === fmtTokens(economy.noCache) && economy.dir === "same"
-              ? m.panelCostTooSmallHint
+              ? m.panelCostTooSmallHint(codexCanReverse(details))
               : readDelta > 0 && writeDelta > 0
               ? m.codexPanelBothHint
               : writeDelta >= readDelta
-              ? m.codexPanelWarmupHint
+              ? m.codexPanelWarmupHint(codexCanReverse(details))
               : m.panelCostWeightHint
           }${writeNote} ${m.codexPanelTokenCostNote}`;
     costRows.push(
@@ -1465,9 +1560,16 @@ export function buildCodexPanelHtml(
     // move a number the reader has learned to look for.
     costRows.push(
       // See the note on `panelCostCompare`: the hedge is dropped where no weight
-      // is below 1, because then no later turn can narrow the gap.
+      // is below 1, because then no later turn can narrow the gap. And every one
+      // of its branches names a direction, so it may not be used at all where an
+      // unstated write count leaves the direction unknown.
+      // `economy.mult` is already null where the unstated count could change
+      // what it prints, so the line states the two figures and nothing about how
+      // far apart they are — which is all that state can support.
       `<div class="sub">${esc(
-        m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir, codexCanReverse(details))
+        economy.directionCertain
+          ? m.panelCostCompare(fmtTokens(economy.noCache), economy.mult, economy.dir, codexCanReverse(details))
+          : m.codexCompareUnknown(fmtTokens(economy.noCache))
       )}</div>`
     );
   } else {

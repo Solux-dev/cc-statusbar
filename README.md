@@ -158,9 +158,9 @@ Hover for the full breakdown (tooltip):
   from the Anthropic Models API
   (`max_input_tokens`, cached 24h); hidden entirely if the limit can't be
   fetched (never guessed).
-- **cache** — how long this session's prompt cache stays warm while you are
-  idle, auto-detected from the transcript, e.g. `🗄 Cache stays warm — 1 hour
-  idle`.
+- **cache** — how long this session's prompt cache stays warm between one
+  request and the next, auto-detected from the transcript, e.g. `🗄 Cache stays
+  warm — 1 hour idle`.
 - **subagents** — one line naming where delegated tokens went:
   `subagents: 8 · ≈2.3M tok — Opus 5/xhigh ×4 ≈1.5M · Sonnet 5/xhigh ×4 ≈861.8k`.
 
@@ -233,9 +233,11 @@ This is not cosmetic: those tokens count against your quota, and nothing else
 shows where they went. If a research errand does not need an expensive model,
 name the model you want in the task itself.
 
-**What waiting costs.** While an agent sits idle its cache goes cold — usually 5
-minutes for a subagent, an hour for the main session, though each stream's own
-lifetime is read from its transcript rather than assumed. After a long enough pause it loads
+**What waiting costs.** An agent's cache goes cold when its next turn comes
+later than the cache lives — usually 5 minutes for a subagent, an hour for the
+main session, though each stream's own lifetime is read from its transcript
+rather than assumed. What filled that pause makes no difference to the clock,
+and the measurement cannot see it either. After a long enough pause the agent loads
 its whole context again and pays for that as a new cache write. Across the 507
 agent logs measured here that is **48%** of everything subagents write to cache
 — and **54%** once each agent's unavoidable first load is set aside — so
@@ -279,11 +281,13 @@ to look anything up:
 
 - **Cache stays warm — `1 hour idle` / `5 minutes idle`.** Auto-detected from
   the session, never assumed. It tells you how long your prompt cache survives
-  while you're idle: on a subscription within its plan limit it's **1 hour**
-  (stepping away for up to an hour stays cheap); an API key, paid usage past
-  your plan limit, or (usually) a subagent run at **5 minutes** (short breaks rebuild the
-  cache and cost more). Check it once to know how long a break you can take —
-  you don't need to watch it.
+  between one request and the next — the clock runs on the gap, not on whether
+  you are at the keyboard, so a six-minute test run cools a five-minute cache
+  while you type all the way through it. On a subscription within its plan limit
+  it's **1 hour**; an API key, paid usage past your plan limit, or (usually) a
+  subagent run at **5 minutes** (short pauses rebuild the cache and cost more).
+  Check it once to know how long a pause you can afford — you don't need to
+  watch it.
 - **Input from cache — e.g. `95%`.** The share of your prompt served from cache
   (cheap) instead of re-read fresh; higher means the cache is being reused well.
   It's normal to start low and climb as a session warms up — a *descriptive* read
@@ -310,7 +314,7 @@ line is shown as not available instead of guessed.
 | `work` / работа | raw input + output tokens (shown under Details) | сырые токены ввода + вывода (в блоке «Детали») |
 | `cache` / кэш | reused context — cheap reads, one-time writes | переиспользованный контекст — дешёвое чтение, разовая запись |
 | `ctx` / `конт` / context / контекст | how full the model's context window is now (input ÷ window limit) — tells you how big a next task can be; its dot is informational (🟢<40% · 🟡40–60% · 🔴60%+) and never tints the whole bar | насколько заполнено контекстное окно модели сейчас (ввод ÷ лимит окна) — подсказывает, насколько большую задачу можно дать дальше; кружок информационный (🟢<40% · 🟡40–60% · 🔴60%+) и не красит весь бар |
-| cache stays warm / кэш держится | how long your prompt cache survives while idle (1 hour or 5 minutes) — available for Claude Code; Codex does not expose this yet | сколько кэш живёт при простое (1 час или 5 минут) — доступно для Claude Code; Codex пока это не отдаёт |
+| cache stays warm / кэш держится | how long your prompt cache survives between one request and the next (1 hour or 5 minutes) — available for Claude Code; Codex does not expose this yet | сколько кэш живёт между запросами (1 час или 5 минут) — доступно для Claude Code; Codex пока это не отдаёт |
 | reloaded after pauses / повторная загрузка после пауз | tokens spent loading a context again because its cache went cold during a wait — descriptive, never a grade | токены, ушедшие на повторную загрузку контекста, чей кэш остыл за время паузы — описание, не оценка |
 | input from cache / ввод из кэша | share of the prompt served from cache (cheap) vs re-read fresh — higher = better reuse; descriptive, not a score | доля промпта из кэша (дёшево) против повторного чтения — выше = лучше переиспользование; описание, не оценка |
 | resets in / сброс через | time until that window's usage resets to 0% | время до обнуления окна |

@@ -521,21 +521,27 @@ export function addTotals(a: Totals, b: Totals): Totals {
   };
 }
 
-export function fmtTokens(n: number, floor = false): string {
+export function fmtTokens(n: number, bound: BoundDirection | boolean = false): string {
   // one decimal, but drop a trailing ".0" → "1M" not "1.0M", "468k" not "468.0k".
   //
-  // `floor` truncates that decimal instead of rounding it. It is for figures
-  // printed as "≥ X": rounding 3.75M up to "3.8M" turns a true lower bound into
-  // a false one — the number claimed would be above the number measured.
+  // A BOUND is rounded away from the measurement, never towards it. "floor"
+  // truncates, for figures printed as "≥ X": rounding 3.75M up to "3.8M" turns a
+  // true lower bound into a false one — the number claimed would be above the
+  // number measured. "ceiling" rounds UP for the same reason mirrored: a "≤ X"
+  // printed from a rounded-down X claims a tighter ceiling than was calculated.
+  // `true` is the older spelling of "floor" and still works.
+  const dir: BoundDirection = bound === true ? "floor" : bound === false ? "exact" : bound;
+  const adj = (v: number): number =>
+    dir === "floor" ? Math.floor(v) : dir === "ceiling" ? Math.ceil(v) : v;
   const f = (v: number, suf: string): string => {
-    const s = (floor ? Math.floor(v * 10) / 10 : v).toFixed(1);
+    const s = (dir === "exact" ? v : adj(v * 10) / 10).toFixed(1);
     return (s.endsWith(".0") ? s.slice(0, -2) : s) + suf;
   };
   if (n >= 1_000_000) return f(n / 1_000_000, "M");
   if (n >= 1_000) return f(n / 1_000, "k");
   // Below 1k the same rule applies: a floor rounds DOWN, or "≥ 1000" could be
   // printed for a measured 999.5.
-  return String(floor ? Math.floor(n) : Math.round(n));
+  return String(dir === "exact" ? Math.round(n) : adj(n));
 }
 
 /** Savings multiplier (noCache / effective) → "6.8", "7" (drops trailing ".0"). */
@@ -563,6 +569,19 @@ export function writeBound(cacheWriteWeight: number): BoundDirection {
   if (cacheWriteWeight > 1) return "floor";
   if (cacheWriteWeight < 1) return "ceiling";
   return "exact";
+}
+
+/** A figure subtracted FROM a bounded one is bounded the other way: if the
+ *  token-equivalent can only be higher than printed, the saving against a fixed
+ *  without-cache figure can only be lower. */
+export function invertBound(b: BoundDirection): BoundDirection {
+  return b === "floor" ? "ceiling" : b === "ceiling" ? "floor" : "exact";
+}
+
+/** The sign a bounded figure is printed with. "exact" gets the ordinary "≈",
+ *  because a figure with no bound is still an estimate. */
+export function boundMark(b: BoundDirection): string {
+  return b === "floor" ? "≥" : b === "ceiling" ? "≤" : "≈";
 }
 export function costDirection(
   effective: number,

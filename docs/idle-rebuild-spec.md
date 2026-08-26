@@ -22,6 +22,12 @@ Run over `~/.claude/projects/**` for one active user, 8 days, dedup by
 `message.id`. Ratios and per-turn figures are what matter here; absolute
 consumption is that user's private data and is deliberately not reproduced.
 
+> **Which sample is which.** The table below is the ORIGINAL 8-day run, split by
+> stream: its `53%` is the 5-minute streams alone, against those streams' own
+> writes. The `48%` in the goal above is a different figure — all subagents
+> together, re-measured 26 August 2026 over 507 agent logs. Two denominators,
+> two questions, both stated where they are used. Neither supersedes the other.
+
 | | Lead session | Subagents |
 |---|---|---|
 | cache TTL of that stream | 1 hour | 5 minutes |
@@ -98,16 +104,16 @@ thing without the word.
 ```
 Delegated work (subagents)
   12 subagents · ≈ 40M tok — 48% of this session's consumption
-  of that, ≈ 6M went on reloading context after pauses (15% of what the agents
-  spent) — an agent's cache usually stays warm for 5 minutes
+  of that, ≈ 6M (15% of what the agents spent) went on reloading context after
+  pauses — an agent's cache usually stays warm for 5 minutes
   [group rows, agent list — unchanged]
   A pause past the agent's cache lifetime… …existing note…
 ```
 ```
 Делегированная работа (субагенты)
   12 субагентов · ≈ 40M ток — 48% расхода сессии
-  из них ≈ 6M ушло на повторную загрузку контекста после пауз (15% расхода
-  агентов) — кэш агента обычно держится 5 минут
+  из них ≈ 6M (15% расхода агентов) ушло на повторную загрузку контекста после
+  пауз — кэш агента обычно держится 5 минут
   [строки по моделям, список агентов — без изменений]
   Пауза дольше срока жизни кэша… …примечание…
 ```

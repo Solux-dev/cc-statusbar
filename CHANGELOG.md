@@ -41,6 +41,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **The Codex panel published a direction that the missing counter decides.**
+  With `100k` of input, `10k` of it cached and no cache-write count stated, the
+  panel said “Cache saved ≈ 9k (~1.1× lower)” — while the ⓘ beside it said the
+  91k was only a floor. Both cannot be true: if the unstated 90k had in fact
+  been written, the figure is 113.5k and the cache *cost* 13.5k. The without-cache
+  figure sat between the two ends, so which is larger was never knowable. The
+  panel now says exactly that, quotes both ends, and publishes no saving, no
+  multiplier and no cause until the interval settles on one side. Where it does
+  settle — and where Codex states the count — nothing changes.
+- **Two footnotes still promised a turn the line above them had stopped
+  promising.** Round 18 gated the four visible cost lines on “can any weight
+  still narrow this gap”. The ⓘ under them kept “so far” and “yet” regardless. A
+  footnote is a statement too.
+- **The hover's comparison word described the wrong figure.** It read
+  `without cache ≈ 1.3M (~3.6× lower)` — the word sits right after the
+  without-cache figure, which is the *higher* of the two; the subject was the
+  with-cache figure at the far end of the line. Both hovers now use the same
+  subject as both panels, so the four surfaces read alike.
+- **A saving derived from a bounded figure was published unbounded.** Where
+  Codex states no write count, the token-equivalent can move — so the saving
+  subtracted from it moves the opposite way, and the multiplier moves with it.
+  The saving now carries `≤` or `≥` when the interval changes what it prints,
+  and the multiplier is dropped there rather than shown at its flattering end.
+  Where the interval cannot change the printed figure, nothing changed.
+- **A bound named “the figure above” when two figures were above it.** That
+  sentence follows the saving on one branch and the token-equivalent on another,
+  and those two are bounded in opposite directions. It names its subject now.
+- **The warm-up ⓘ described reads that need not exist.** It is reachable with no
+  cached reads at all, where “bigger than what the reads save” compares against
+  something the page never shows.
 - **The hover promised a turn the arithmetic forbids.** Round 17 taught three of
   the four cost lines to drop “so far” wherever no weight is below 1 — the point
   where the gap between the two figures can only widen. The Claude **hover** was
@@ -64,7 +94,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   bound and an upper bound on the same measurement, in the same sentence. The
   per-agent cells had already settled this by dropping the share; the summary
   now does the same, and the legend explains that shape instead of describing
-  only the three it used to.
+  only the three it used to. (A state reached by calling the renderer directly,
+  not by any session on this machine: the row only appears at 3% of the session,
+  and the agents are a subset of it.)
 - **The cache-lifetime ⓘ pinned the clock on the reader.** It said the cache
   stays warm “while you are idle” (RU: «пока вы не печатаете»). The clock runs
   between one request and the next: a six-minute test run cools a five-minute
@@ -76,8 +108,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   and told the next session to build what had already shipped; and the Codex
   plan carried OpenAI cache figures that no longer match the source. Re-read at
   developers.openai.com on 26 August 2026: the 1,024-token minimum applies to
-  GPT-5.6 and later (2,048 before that), GPT-5.6+ has one retention value
-  (`30m`), and `gpt-5.5` is not limited to `24h`.
+  GPT-5.6 and later (2,048 before that); GPT-5.6+ has one retention value,
+  `30m`, and that is a minimum rather than a guaranteed expiry; `gpt-5.5` and
+  `gpt-5.5-pro` support `24h` only; the choice between `in_memory` and `24h`
+  belongs to the other earlier models. The README's cache-lifetime prose tied
+  the clock to whether the reader was at the keyboard, and the idle-rebuild spec
+  published two shares of “all cache writes” — 48% and 53% — without saying they
+  answer different questions over different samples. Both now say which is which.
 - **The hover still said “tier”.** 1.0.24 dropped that word from the panel but
   missed the same line in the hover, so one fact had two names: “Cache stays
   warm — 1 hour idle” in the panel, “1-hour tier” in the hover. Both now read
@@ -167,13 +204,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
   payload gave 69k through one path and 72k through the other. Both now use the
   same three-bucket split.
 - **A lower bound below 1% lost its marker.** With unjudged gaps and a share
-  that floors below 1%, the summary printed `≈ 1.3M (<1%)`, presenting a floor
-  as a measurement. The token figure keeps its `≥` now, and the share is dropped
-  rather than printed: `<1%` is a ceiling, the tokens beside it are a floor, and
-  two opposite bounds on one measurement contradict each other. This is the rule
-  the per-agent cells already followed. (A state reached by calling the renderer
-  directly, not by any session on this machine: the row only appears at 3% of
-  the session, and the agents are a subset of it.)
+  that floors below 1%, the summary printed `≈ 1.3M (<1%)` — an `≈` on a figure
+  measured from part of the log only, which presents a bound as a measurement.
+  The token figure carries `≥` there now. (The `<1%` beside it was wrong too,
+  in the other direction; that half is a separate entry above.)
 - **The Codex panel named a cause for a difference it does not print.** Pricing
   the write made this state reachable there for the first time: 1.2M of input
   with a 40k write leaves a 10k premium, both figures print as `1.2M`, the line
