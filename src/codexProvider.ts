@@ -1,5 +1,5 @@
 import { emptyTotals, QuotaWindow, Totals } from "./metrics";
-import { CacheView, ContextView } from "./render";
+import { CacheView, ContextView } from "./panelModel";
 import { ProviderSnapshot } from "./providerTypes";
 
 export function shortCodexModelLabel(model: string | null | undefined): string | null {

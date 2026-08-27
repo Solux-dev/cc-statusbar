@@ -23,7 +23,8 @@ import {
   knownModelWindow,
   WINDOW_5H_SECONDS,
 } from "../metrics";
-import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, subagentGroups, choicesMarkdown, rebuildDisplay, agentIdle, DELEGATED_TOGGLE_COMMAND, ISSUES_URL } from "../render";
+import { buildView, buildPanelHtml, buildCodexQuotaView, buildCodexPanelHtml, choicesMarkdown, DELEGATED_TOGGLE_COMMAND, ISSUES_URL } from "../render";
+import { subagentGroups, rebuildDisplay, agentIdle } from "../panelModel";
 import { parseLocalQuota, windowFromBridge } from "../localQuota";
 import {
   parseCachedUsage,
