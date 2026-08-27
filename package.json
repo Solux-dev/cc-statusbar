@@ -203,7 +203,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "node --test out/test/logic.test.js",
+    "test": "node --test \"out/test/*.test.js\"",
     "package": "npx --yes @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {

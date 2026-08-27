@@ -27,15 +27,17 @@ import {
   buildPanelHtml,
   buildCodexQuotaView,
   buildCodexPanelHtml,
+  choicesMarkdown,
+  DELEGATED_TOGGLE_COMMAND,
+} from "./render";
+import {
   QuotaView,
   ContextView,
   CacheView,
   ModelView,
   SubagentView,
   RebuildView,
-  choicesMarkdown,
-  DELEGATED_TOGGLE_COMMAND,
-} from "./render";
+} from "./panelModel";
 import { Weights, ContextInfo, QuotaWindow, ScopedQuotaWindow, effectiveTokens, knownModelWindow } from "./metrics";
 import { readLocalQuota } from "./localQuota";
 import { readCachedUsage } from "./usage";

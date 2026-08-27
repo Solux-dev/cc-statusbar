@@ -1,5 +1,5 @@
 import type { PaceLevel, QuotaWindow, Totals } from "./metrics";
-import type { CacheView, ContextView } from "./render";
+import type { CacheView, ContextView } from "./panelModel";
 
 export type UsageProviderKind = "claude" | "codex";
 
