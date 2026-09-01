@@ -563,8 +563,8 @@ const EN: Messages = {
   },
   quotaUnavail: (msg) => `_Quota 5h/7d: ${msg}._`,
   quotaStateMsg: {
-    disabled: "polling is off (`ccStatusbar.quota.enabled`)",
-    "no-credentials": "no token found at `~/.claude/.credentials.json`",
+    disabled: "polling is off (ccStatusbar.quota.enabled)",
+    "no-credentials": "no token found at ~/.claude/.credentials.json",
     "rate-limited": "temporary request limit — will retry later",
     error: "temporarily unavailable (request failed)",
   },
@@ -899,8 +899,8 @@ const RU: Messages = {
   },
   quotaUnavail: (msg) => `_Тариф 5ч/7д: ${msg}._`,
   quotaStateMsg: {
-    disabled: "опрос выключен (`ccStatusbar.quota.enabled`)",
-    "no-credentials": "не найден токен `~/.claude/.credentials.json`",
+    disabled: "опрос выключен (ccStatusbar.quota.enabled)",
+    "no-credentials": "не найден токен ~/.claude/.credentials.json",
     "rate-limited": "временный лимит запросов — повтор позже",
     error: "временно недоступен (запрос не прошёл)",
   },
