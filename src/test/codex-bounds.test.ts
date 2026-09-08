@@ -527,11 +527,13 @@ test("an unstated Codex write count bounds the figure the way the WEIGHT says, n
   // branch and the token-equivalent on another, and those two are bounded in
   // opposite directions — "the figure above" pointed at the wrong one half the
   // time.
-  assert.match(at(1.25, "en"), /the token-equivalent is a floor: your `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
-  assert.match(at(1.25, "ru"), /токен-эквивалент — нижняя граница: ваш параметр `ccStatusbar\.cacheWriteWeight` \(1\.25\)/);
+  // The setting name is markdown in the i18n string and `<code>` on the page —
+  // see code-spans.test.ts. The sentence around it is unchanged.
+  assert.match(at(1.25, "en"), /the token-equivalent is a floor: your <code>ccStatusbar\.cacheWriteWeight<\/code> \(1\.25\)/);
+  assert.match(at(1.25, "ru"), /токен-эквивалент — нижняя граница: ваш параметр <code>ccStatusbar\.cacheWriteWeight<\/code> \(1\.25\)/);
 
   const ceiling = at(0.5, "en");
-  assert.match(ceiling, /the token-equivalent is a ceiling: your `ccStatusbar\.cacheWriteWeight` \(0\.5\)/);
+  assert.match(ceiling, /the token-equivalent is a ceiling: your <code>ccStatusbar\.cacheWriteWeight<\/code> \(0\.5\)/);
   assert.ok(!/is a floor/.test(ceiling), "a write priced below fresh input makes the same figure a ceiling");
   assert.match(at(0.5, "ru"), /токен-эквивалент — верхняя граница/);
 

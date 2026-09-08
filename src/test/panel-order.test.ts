@@ -43,9 +43,11 @@ function posIn(html: string, needle: string, where: string): number {
 }
 
 /** The page with every ⓘ footnote removed: what the reader sees without hovering.
- *  Sound because `esc()` never emits a raw `<` inside a footnote. */
+ *  Non-greedy rather than "up to the next `<`": since the panel draws a setting
+ *  name as `<code>`, a footnote does contain tags. It never contains a nested
+ *  `</span>`, so the first one still closes the right box. */
 function withoutFootnotes(html: string): string {
-  return html.replace(/<span class="tip">[^<]*<\/span>/g, "");
+  return html.replace(/<span class="tip">.*?<\/span>/g, "");
 }
 
 const CLAUDE_ORDER = [
