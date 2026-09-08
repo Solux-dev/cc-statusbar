@@ -633,9 +633,48 @@ export function buildCodexQuotaView(
   return { text, tooltip: t.join("\n"), level: segs.length ? level : "tight" };
 }
 
+/** Escape for panel TEXT, and render a markdown code span as real markup.
+ *
+ *  The same i18n strings feed two surfaces: the hover, which is a VS Code
+ *  MarkdownString and renders `x` as inline code, and the panel, which is plain
+ *  HTML and printed the backticks as characters. Stripping them from i18n would
+ *  fix the panel and spoil the hover, so the conversion lives here instead —
+ *  every panel string passes through this one function, so a setting name added
+ *  to any future footnote is right on both surfaces without anyone remembering.
+ *  Reported by @VedantMadane (#1, PR #4).
+ *
+ *  Escaping runs first: the span content is already inert by the time the tags
+ *  go on. Only a matched pair on one line becomes a `<code>`, so a lone backtick
+ *  survives as itself and the test that forbids it in the rendered panel points
+ *  at the string that lost its partner. */
 function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
 }
+
+/** Escape for an HTML ATTRIBUTE. An attribute holds no markup, so a code span
+ *  cannot be drawn there — the backticks are dropped rather than turned into
+ *  tags a browser would print verbatim. Quotes are escaped here and not in
+ *  `esc`, because this is the only context where one would end the value. */
+function escAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/`/g, "");
+}
+
+/** Inline code, styled identically in both panels. `overflow-wrap` matters: the
+ *  names these spans hold (`ccStatusbar.cacheWriteWeight`) are longer than a
+ *  footnote is wide when the panel is docked into a narrow column. */
+const CODE_CSS = `
+  code { font-family: var(--vscode-editor-font-family, monospace); font-size:.92em;
+         padding:0 3px; border-radius:3px; overflow-wrap:anywhere;
+         background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.18)); }`;
 
 /** Issue tracker — the extension's only route back to the project. Kept in sync
  *  with `bugs.url` in package.json by a test, so the two cannot drift. */
@@ -749,7 +788,7 @@ export function buildPanelHtml(
     suffix = "",
     hint = ""
   ): void => {
-    const title = hint ? ` title="${esc(hint)}"` : "";
+    const title = hint ? ` title="${escAttr(hint)}"` : "";
     if (!w) {
       quotaBlock.push(`<div class="qrow"${title}><span class="qlabel">${esc(label)}</span><span>—</span></div>`);
       return;
@@ -1095,7 +1134,7 @@ export function buildPanelHtml(
   /* .arow span would dim this one back down; and the cell hangs on the right
      edge, so its footnote has to open leftward or it opens off the page. */
   .arow .idle .hint { opacity:1; }
-  .arow .idle .tip { left:auto; right:0; }${FOOT_CSS}
+  .arow .idle .tip { left:auto; right:0; }${FOOT_CSS}${CODE_CSS}
   .legend { margin-top:18px; opacity:.6; font-size:12px; }
 </style>
 </head>
@@ -1290,7 +1329,7 @@ export function buildCodexPanelHtml(
   .bar i { display:block; height:100%; }
   .qrow b { width:42px; text-align:right; font-variant-numeric: tabular-nums; }
   .verdict { opacity:.7; font-size:12px; }
-  .muted { opacity:.55; }${HINT_CSS}${FOOT_CSS}
+  .muted { opacity:.55; }${HINT_CSS}${FOOT_CSS}${CODE_CSS}
 </style>
 </head>
 <body>
